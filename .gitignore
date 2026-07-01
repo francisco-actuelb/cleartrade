@@ -1,0 +1,17 @@
+#Dépendances Composer
+/vendor/
+
+#Variables d'environnement et secrets (TRÈS IMPORTANT)
+.env
+.env.*
+
+#Dossier des logs (généré par les crons)
+/logs/
+*.log
+nohup.out
+
+#Fichiers système et configuration IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

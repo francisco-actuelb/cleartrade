@@ -1,0 +1,161 @@
+{% extends "base.html.twig" %}
+
+{% block title %}Tableau de bord - ClearTrade{% endblock %}
+
+{% block content %}
+    <div class="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900">Activité des Initiés (Insiders)</h1>
+            <p class="text-gray-500 mt-2">Vue agrégée par jour des transactions (P et S) extraites de la SEC.</p>
+        </div>
+        <div class="text-right">
+            <p class="text-xs text-gray-400 mb-2">Dernier formulaire lu : <span class="font-mono">{{ lastIngestionId ?: 'Aucun' }}</span></p>
+            <a href="/ingest" class="inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-brand hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand transition-colors">
+                Forcer la mise à jour SEC
+            </a>
+        </div>
+    </div>
+
+    <!-- Filtres de recherche -->
+    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6">
+        <form method="GET" action="/" class="flex flex-col sm:flex-row gap-4 items-end">
+            <div class="w-full sm:w-auto">
+                <label for="ticker" class="block text-sm font-medium text-gray-700 mb-1">Ticker (Symbole)</label>
+                <input type="text" name="ticker" id="ticker" value="{{ filters.ticker }}" placeholder="Ex: AAPL" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border p-2">
+            </div>
+            <div class="w-full sm:w-auto">
+                <label for="type" class="block text-sm font-medium text-gray-700 mb-1">Type de transaction</label>
+                <select name="type" id="type" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border p-2 bg-white">
+                    <option value="">Tous (P & S)</option>
+                    <option value="P" {% if filters.type == 'P' %}selected{% endif %}>Achats (P)</option>
+                    <option value="S" {% if filters.type == 'S' %}selected{% endif %}>Ventes (S)</option>
+                </select>
+            </div>
+            <div class="w-full sm:w-auto">
+                <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-brand bg-blue-50 hover:bg-blue-100 transition-colors">
+                    Filtrer
+                </button>
+            </div>
+            {% if filters.ticker or filters.type %}
+                <div class="w-full sm:w-auto">
+                    <a href="/" class="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors">
+                        Réinitialiser
+                    </a>
+                </div>
+            {% endif %}
+        </form>
+    </div>
+
+    <!-- Tableau des transactions agrégées -->
+    <div class="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden mb-6">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Entreprise</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Initié</th>
+                    <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume Total</th>
+                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Prix Moyen</th>
+                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Valeur Totale</th>
+                    <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                {% for tx in transactions %}
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
+                            {{ tx.transaction_date|date("d/m/Y") }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-bold text-gray-900">{{ tx.ticker }}</div>
+                            <div class="text-sm text-gray-500 truncate max-w-[150px]" title="{{ tx.company_name }}">{{ tx.company_name }}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-900 font-medium">{{ tx.insider_name }}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            {% if tx.transaction_code == 'P' %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    Achat (P)
+                                </span>
+                            {% elseif tx.transaction_code == 'S' %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                    Vente (S)
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            <div class="text-sm text-gray-900 font-medium">{{ tx.total_shares|number_format(0, ',', ' ') }}</div>
+                            {% if tx.transaction_count > 1 %}
+                                <div class="text-xs text-gray-400 mt-1">en {{ tx.transaction_count }} txs</div>
+                            {% else %}
+                                <div class="text-xs text-gray-400 mt-1">en 1 tx</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
+                            ${{ tx.avg_price_per_share|number_format(2, '.', ',') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 text-right">
+                            ${{ (tx.total_shares * tx.avg_price_per_share)|number_format(0, '.', ' ') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                            <a href="/details?date={{ tx.transaction_date }}&company={{ tx.company_id }}&insider={{ tx.insider_id }}&type={{ tx.transaction_code }}" class="text-brand hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs">
+                                Détails
+                            </a>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="8" class="px-6 py-10 text-center text-gray-500">
+                            Aucune transaction trouvée pour ces critères.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    {% if totalPages > 1 %}
+        <div class="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 rounded-xl shadow-sm border mb-8">
+
+            <!-- Pagination pour Mobile -->
+            <div class="flex flex-1 justify-between sm:hidden">
+                {% if currentPage > 1 %}
+                    <a href="?page={{ currentPage - 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Précédent</a>
+                {% endif %}
+                {% if currentPage < totalPages %}
+                    <a href="?page={{ currentPage + 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative ml-auto inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Suivant</a>
+                {% endif %}
+            </div>
+
+            <!-- Pagination pour Desktop -->
+            <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Page <span class="font-medium">{{ currentPage }}</span> sur <span class="font-medium">{{ totalPages }}</span>
+                    </p>
+                </div>
+                <div>
+                    <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                        {% if currentPage > 1 %}
+                            <a href="?page={{ currentPage - 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative inline-flex items-center rounded-l-md px-4 py-2 text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 font-medium text-sm transition-colors">
+                                &laquo; Précédent
+                            </a>
+                        {% endif %}
+
+                        {% if currentPage < totalPages %}
+                            <a href="?page={{ currentPage + 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative inline-flex items-center {% if currentPage <= 1 %}rounded-l-md{% endif %} rounded-r-md px-4 py-2 text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 font-medium text-sm transition-colors">
+                                Suivant &raquo;
+                            </a>
+                        {% endif %}
+                    </nav>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+{% endblock %}
