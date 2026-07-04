@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <!-- Fond bleu arrondi (couleur 'brand' Tailwind) -->
+    <rect width="100" height="100" rx="22" fill="#2563eb" />
+    
+    <!-- Axes du graphique (semi-transparents) -->
+    <path d="M25 25 L25 75 L80 75" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />
+    
+    <!-- Courbe boursière en hausse -->
+    <path d="M25 65 L45 40 L55 50 L80 20" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+    
+    <!-- Point final (Target) -->
+    <circle cx="80" cy="20" r="7" fill="#ffffff" />
+</svg>

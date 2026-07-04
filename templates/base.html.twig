@@ -1,55 +1,53 @@
-<!-- /var/www/ct.hsrv.fr/templates/base.html.twig -->
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" class="h-full bg-gray-50">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}ClearTrade{% endblock %}</title>
-    <!-- Chargement de Tailwind CSS via CDN pour le développement rapide -->
+    <!-- Ajout de l'icône SVG du site -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
-                        brand: '#2563eb',
+                        brand: '#2563eb', // Bleu professionnel (Tailwind blue-600)
                     }
                 }
             }
         }
     </script>
 </head>
-<body class="bg-gray-50 text-gray-900 font-sans antialiased flex flex-col min-h-screen">
-
-<!-- Barre de navigation -->
-<nav class="bg-white shadow-sm border-b border-gray-200">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex justify-between h-16">
-            <div class="flex items-center">
-                <a href="/" class="flex items-center gap-2">
-                    <svg class="w-8 h-8 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
-                    <span class="text-xl font-bold text-gray-800 tracking-tight">ClearTrade</span>
-                </a>
-            </div>
-            <div class="flex items-center space-x-4">
-                <a href="/" class="text-gray-600 hover:text-brand font-medium">Tableau de bord</a>
-                <a href="/ingest" class="bg-brand text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition">Test Ingestion</a>
+<body class="h-full">
+<div class="min-h-full">
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="flex items-center gap-2">
+                        <svg class="w-8 h-8 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+                        <span class="text-xl font-bold text-gray-800 tracking-tight">ClearTrade</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-gray-600 hover:text-brand font-medium">Tableau de bord</a>
+                    <a href="/screener" class="text-gray-600 hover:text-brand font-medium flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+                        Screener
+                    </a>
+                </div>
             </div>
         </div>
-    </div>
-</nav>
+    </nav>
 
-<!-- Contenu principal dynamique -->
-<main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-    {% block content %}{% endblock %}
-</main>
-
-<!-- Pied de page -->
-<footer class="bg-white border-t border-gray-200 py-6 mt-auto">
-    <div class="max-w-7xl mx-auto px-4 text-center text-sm text-gray-500">
-        &copy; 2026 ClearTrade. Tous droits réservés.
-    </div>
-</footer>
-
+    <!-- Main Content -->
+    <main>
+        <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+</div>
 </body>
 </html>

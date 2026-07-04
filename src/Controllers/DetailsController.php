@@ -56,7 +56,19 @@ class DetailsController
             return $response->withHeader('Location', '/')->withStatus(302);
         }
 
-        // NOUVEAU : On va chercher le signal IA et les erreurs éventuelles
+        // NOUVEAU : Calcul du prix moyen pondéré de l'opération globale
+        $totalVolume = 0;
+        $totalValue = 0;
+        foreach ($rawTransactions as $tx) {
+            $totalVolume += $tx['shares'];
+            $totalValue += ($tx['shares'] * $tx['price_per_share']);
+        }
+        $avgOperationPrice = $totalVolume > 0 ? ($totalValue / $totalVolume) : 0;
+
+        // NOUVEAU : On va chercher la MA200 locale
+        $ma200 = $this->model->getMA200($context['ticker'], $date);
+
+        // On va chercher le signal IA et les erreurs éventuelles
         $aiSignal = $this->model->getAiSignal($companyId, $insiderId, $date);
         $error = $queryParams['error'] ?? null;
 
@@ -65,8 +77,10 @@ class DetailsController
             'context' => $context,
             'type' => $type,
             'date' => $date,
-            'ai_signal' => $aiSignal, // Ajout du signal
-            'error' => $error         // Ajout de l'erreur pour affichage
+            'ai_signal' => $aiSignal,
+            'error' => $error,
+            'ma200' => $ma200,                      // Ajout de la MA200
+            'avg_price' => $avgOperationPrice       // Ajout du prix moyen de l'opération
         ]);
     }
 }

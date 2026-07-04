@@ -1,48 +1,41 @@
 <?php
 // /var/www/ct.hsrv.fr/bin/cron.php
 
-// Ce script est conçu pour être exécuté en ligne de commande (CLI) par le système.
 require __DIR__ . '/../vendor/autoload.php';
 
 use Dotenv\Dotenv;
 use App\Models\IngestionModel;
 use App\Services\SecFetcherService;
 
-// 1. Initialisation de l'environnement et connexion BDD
-if (file_exists(__DIR__ . '/../.env')) {
-    $dotenv = Dotenv::createImmutable(__DIR__ . '/../');
-    $dotenv->load();
-}
+// Initialisation
+$dotenv = Dotenv::createImmutable(__DIR__ . '/../');
+$dotenv->load();
 
-$host = $_ENV['DB_HOST'] ?? '127.0.0.1';
-$db   = $_ENV['DB_NAME'] ?? 'cleartrade';
-$user = $_ENV['DB_USER'] ?? 'ct_user';
-$pass = $_ENV['DB_PASS'] ?? '';
-
-$dsn = "mysql:host=$host;dbname=$db;charset=utf8mb4";
-$options = [
-    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-];
+$host = $_ENV['DB_HOST'];
+$db   = $_ENV['DB_NAME'];
+$user = $_ENV['DB_USER'];
+$pass = $_ENV['DB_PASS'];
 
 try {
-    $pdo = new PDO($dsn, $user, $pass, $options);
+    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
 } catch (PDOException $e) {
-    die("[" . date('Y-m-d H:i:s') . "] ERREUR CRITIQUE : Connexion BDD impossible - " . $e->getMessage() . "\n");
+    die("[" . date('Y-m-d H:i:s') . "] Erreur de connexion BDD : " . $e->getMessage() . "\n");
 }
 
 $model = new IngestionModel($pdo);
 $fetcher = new SecFetcherService();
 
-echo "[" . date('Y-m-d H:i:s') . "] Début de l'ingestion automatique SEC...\n";
+echo "[" . date('Y-m-d H:i:s') . "] Démarrage du Cron SEC...\n";
 
-// 2. Exécution de la logique d'ingestion
 try {
     $lastProcessedId = $model->getLastProcessedId();
     $newEntries = $fetcher->fetchNewFilings($lastProcessedId);
 
     if (empty($newEntries)) {
-        echo "[" . date('Y-m-d H:i:s') . "] Aucun nouveau formulaire.\n";
+        echo "Aucun nouveau formulaire à traiter. (Dernier ID: " . ($lastProcessedId ?: 'Aucun') . ")\n";
         exit(0);
     }
 
@@ -52,7 +45,7 @@ try {
     foreach ($newEntries as $entry) {
         $rawId = (string)$entry->id;
 
-        // Extraction de l'Accession Number
+        // CORRECTION : Extraction propre de l'Accession Number
         if (preg_match('/([0-9]{10}-[0-9]{2}-[0-9]{6})/', $rawId, $matches)) {
             $accessionNumber = $matches[1];
         } else {
@@ -69,30 +62,32 @@ try {
 
         if (empty($link)) continue;
 
-        // Téléchargement
         $xml = $fetcher->fetchForm4Xml($link);
-        usleep(200000); // Pause de 200ms pour préserver le serveur de la SEC
+        usleep(200000); // 200ms de pause pour la SEC
 
         if (!$xml) {
             $model->setLastProcessedId($accessionNumber);
             continue;
         }
 
-        // Préparation des données
         $issuerData = [
-            'cik' => (string)$xml->issuer->issuerCik,
-            'name' => (string)$xml->issuer->issuerName,
-            'ticker' => (string)$xml->issuer->issuerTradingSymbol
+            'cik' => isset($xml->issuer->issuerCik) ? (string)$xml->issuer->issuerCik : '',
+            'name' => isset($xml->issuer->issuerName) ? (string)$xml->issuer->issuerName : 'UNKNOWN',
+            'ticker' => isset($xml->issuer->issuerTradingSymbol) ? (string)$xml->issuer->issuerTradingSymbol : 'UNKNOWN'
         ];
+
+        if (!isset($xml->reportingOwner[0]->reportingOwnerId)) {
+            $model->setLastProcessedId($accessionNumber);
+            $processedCount++;
+            continue;
+        }
 
         $ownerData = [
-            'cik' => (string)$xml->reportingOwner->reportingOwnerId->rptOwnerCik,
-            'name' => (string)$xml->reportingOwner->reportingOwnerId->rptOwnerName
+            'cik' => isset($xml->reportingOwner[0]->reportingOwnerId->rptOwnerCik) ? (string)$xml->reportingOwner[0]->reportingOwnerId->rptOwnerCik : '0000000000',
+            'name' => isset($xml->reportingOwner[0]->reportingOwnerId->rptOwnerName) ? (string)$xml->reportingOwner[0]->reportingOwnerId->rptOwnerName : 'UNKNOWN'
         ];
 
-        // --- NOUVEAU : Extraction des Remarks et Footnotes ---
         $remarks = isset($xml->remarks) ? trim((string)$xml->remarks) : null;
-
         $footnotesMap = [];
         if (isset($xml->footnotes->footnote)) {
             foreach ($xml->footnotes->footnote as $fn) {
@@ -100,7 +95,6 @@ try {
                 $footnotesMap[$id] = trim((string)$fn);
             }
         }
-        // -----------------------------------------------------
 
         if (!isset($xml->nonDerivativeTable->nonDerivativeTransaction)) {
             $model->setLastProcessedId($accessionNumber);
@@ -109,24 +103,23 @@ try {
         }
 
         $transactionsData = [];
-        $title = isset($reportingOwner->reportingOwnerRelationship->officerTitle)
-            ? (string)$reportingOwner->reportingOwnerRelationship->officerTitle
-            : 'Director';
+
+        $title = 'Director';
+        if (isset($xml->reportingOwner[0]->reportingOwnerRelationship->officerTitle)) {
+            $title = (string)$xml->reportingOwner[0]->reportingOwnerRelationship->officerTitle;
+        }
 
         $index = 0;
         foreach ($xml->nonDerivativeTable->nonDerivativeTransaction as $tx) {
             $tx_code = (string)$tx->transactionCoding->transactionCode;
             $price = (float)($tx->transactionAmounts->transactionPricePerShare->value ?? 0);
 
-            // FILTRE STRICT : Uniquement les achats/ventes (P/S) sur le marché libre avec un prix valide
             if (!in_array($tx_code, ['P', 'S']) || $price <= 0) {
                 $index++;
                 continue;
             }
 
             if (isset($tx->transactionAmounts->transactionShares->value)) {
-
-                // --- NOUVEAU : Mapping des notes de bas de page ---
                 $lineFootnotes = [];
                 $footnoteNodes = $tx->xpath('.//footnoteId');
                 if ($footnoteNodes !== false) {
@@ -138,7 +131,23 @@ try {
                     }
                 }
                 $footnotesText = !empty($lineFootnotes) ? implode("\n", $lineFootnotes) : null;
-                // --------------------------------------------------
+
+                $sharesFollowing = isset($tx->postTransactionAmounts->sharesOwnedFollowingTransaction->value)
+                    ? (int)$tx->postTransactionAmounts->sharesOwnedFollowingTransaction->value : 0;
+
+                $dirInd = isset($tx->ownershipNature->directOrIndirectOwnership->value)
+                    ? (string)$tx->ownershipNature->directOrIndirectOwnership->value : 'D';
+
+                $is10b51 = 0;
+                if (isset($tx->rule10b51Transaction) && in_array(strtolower((string)$tx->rule10b51Transaction), ['1', 'true'])) {
+                    $is10b51 = 1;
+                }
+                if (!$is10b51) {
+                    $combinedText = ($footnotesText ?? '') . ' ' . ($remarks ?? '');
+                    if (preg_match('/10b5[- ]1/i', $combinedText)) {
+                        $is10b51 = 1;
+                    }
+                }
 
                 $transactionsData[] = [
                     'line_idx' => $index,
@@ -147,14 +156,16 @@ try {
                     'shares'   => (int)$tx->transactionAmounts->transactionShares->value,
                     'price'    => $price,
                     'title'    => $title,
-                    'remarks'  => $remarks, // Ajout
-                    'footnotes'=> $footnotesText // Ajout
+                    'remarks'  => $remarks,
+                    'footnotes'=> $footnotesText,
+                    'shares_following' => $sharesFollowing,
+                    'direct_or_indirect' => $dirInd,
+                    'is_10b51' => $is10b51
                 ];
             }
             $index++;
         }
 
-        // Insertion
         if (!empty($transactionsData)) {
             $insertedCount = $model->processForm4($accessionNumber, $issuerData, $ownerData, $transactionsData);
             $totalTransactionsInserted += $insertedCount;
@@ -164,9 +175,9 @@ try {
         $processedCount++;
     }
 
-    echo "[" . date('Y-m-d H:i:s') . "] Succès : $processedCount formulaires lus, $totalTransactionsInserted transactions insérées.\n";
+    echo "Succès : $processedCount formulaire(s) lu(s), $totalTransactionsInserted transaction(s) insérée(s).\n";
 
 } catch (Exception $e) {
-    echo "[" . date('Y-m-d H:i:s') . "] ERREUR LORS DE L'INGESTION : " . $e->getMessage() . "\n";
+    echo "Erreur critique : " . $e->getMessage() . "\n";
     exit(1);
 }

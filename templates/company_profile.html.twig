@@ -1,0 +1,345 @@
+{% extends "base.html.twig" %}
+
+{% block title %}{{ company.name }} ({{ company.ticker }}) - ClearTrade{% endblock %}
+
+{% block content %}
+    <div class="mb-6 flex justify-between items-center">
+        <a href="/" class="inline-flex items-center text-sm font-medium text-brand hover:text-blue-800 transition-colors">
+            &laquo; Retour au tableau de bord
+        </a>
+    </div>
+
+    <!-- En-tête -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 w-full overflow-hidden">
+        <div class="flex flex-col sm:flex-row justify-between items-start gap-4">
+            <div class="w-full">
+                <h1 class="text-2xl sm:text-3xl font-extrabold text-gray-900 mb-2">
+                    {{ company.name }}
+                    <a href="/?ticker={{ company.ticker }}" class="text-brand hover:underline">
+                        {{ company.ticker }}
+                    </a>
+                </h1>
+                <div class="flex flex-wrap gap-2 text-sm text-gray-600">
+                    <span class="bg-gray-100 px-2 py-1 rounded">Secteur: {{ company.sector|default('N/A') }}</span>
+                    <span class="bg-gray-100 px-2 py-1 rounded">Industrie: {{ company.industry|default('N/A') }}</span>
+                    <span class="bg-gray-100 px-2 py-1 rounded">Actions en circ.: {{ company.shares_outstanding ? company.shares_outstanding|number_format(0, ',', ' ') : 'N/A' }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Panneau d'Analyse Technique (MA & RSI) -->
+    <div class="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-wrap gap-6 items-center" id="tech-summary-panel">
+        <div>
+            <div class="text-xs text-gray-500 uppercase font-semibold mb-1">Dernier Prix</div>
+            <div class="text-xl font-bold text-gray-900" id="current-price-val">...</div>
+        </div>
+
+        <div class="hidden sm:block w-px h-8 bg-gray-200"></div>
+
+        <div>
+            <div class="text-xs text-gray-500 uppercase font-semibold mb-1">MA (<span id="ma-period-label">...</span>)</div>
+            <div class="flex items-center gap-2">
+                <span class="text-lg font-bold text-gray-700" id="ma-val">...</span>
+                <span id="ma-badge"></span>
+            </div>
+        </div>
+
+        <div class="hidden sm:block w-px h-8 bg-gray-200"></div>
+
+        <div>
+            <div class="text-xs text-gray-500 uppercase font-semibold mb-1">RSI (14 jours)</div>
+            <div class="flex items-center gap-2">
+                <span class="text-lg font-bold text-gray-700" id="rsi-val">...</span>
+                <span id="rsi-badge"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conteneur des Graphiques (Lightweight Charts) -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-3 sm:p-4 mb-8 w-full">
+        <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
+            <h2 class="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <svg class="w-5 h-5 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
+                Analyse Technique & Initiés
+            </h2>
+        </div>
+
+        <!-- Panneau de contrôle des filtres -->
+        <div id="chart-controls" class="hidden flex-col gap-3 mb-4 bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div class="flex items-center justify-between border-b border-gray-200 pb-2 mb-2">
+                <span class="text-sm font-semibold text-gray-700">Filtrer l'affichage</span>
+                <label class="flex items-center cursor-pointer">
+                    <input type="checkbox" id="toggle-ma" class="sr-only peer" checked>
+                    <div class="relative w-9 h-5 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                    <span class="ms-2 text-sm font-medium text-gray-700" id="ma-label">Moyenne Mobile</span>
+                </label>
+            </div>
+            <div id="insider-filters" class="flex flex-wrap gap-2">
+                <!-- Les boutons seront générés ici par Javascript -->
+            </div>
+        </div>
+
+        <!-- Zone de chargement & Erreurs -->
+        <div id="chart-loader" class="flex justify-center items-center h-[300px] text-gray-400">
+            <svg id="spinner" class="animate-spin -ml-1 mr-3 h-8 w-8 text-brand" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <span id="loader-text">Chargement des données boursières...</span>
+        </div>
+
+        <!-- Conteneurs repensés : Sans classes de hauteur Tailwind, margin-bottom important -->
+        <div class="w-full relative">
+            <div id="main-chart-container" class="w-full mb-8">
+                <div id="main-chart" class="w-full hidden"></div>
+            </div>
+
+            <div id="rsi-chart-container" class="w-full border-t border-gray-200 pt-6">
+                <div id="rsi-chart" class="w-full hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Liste des initiés -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 w-full overflow-hidden">
+        <h3 class="text-lg font-bold text-gray-900 mb-4">Derniers Initiés Actifs (Fiches Profils)</h3>
+        <div class="flex flex-wrap gap-2">
+            {% for insider in insiders %}
+                <a href="/insider/{{ insider.id }}" class="inline-flex items-center px-3 py-1.5 border border-gray-200 rounded-lg hover:border-brand hover:bg-blue-50 transition-colors group max-w-full truncate">
+                    <span class="font-medium text-sm text-gray-900 group-hover:text-brand truncate">{{ insider.name }}</span>
+                    {% if insider.title %}
+                        <span class="ml-2 text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded truncate">{{ insider.title|slice(0, 15) }}</span>
+                    {% endif %}
+                </a>
+            {% else %}
+                <span class="text-gray-500 text-sm">Aucun initié trouvé.</span>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Import de la librairie Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+
+    <script>
+        function updateTechSummary(currentPrice, maValue, rsiValue, maPeriodLabel) {
+            document.getElementById('current-price-val').innerText = '$' + currentPrice.toFixed(2);
+            document.getElementById('ma-period-label').innerText = maPeriodLabel ? maPeriodLabel + 'j' : 'N/A';
+
+            if (maValue) {
+                document.getElementById('ma-val').innerText = '$' + maValue.toFixed(2);
+                const maBadge = document.getElementById('ma-badge');
+                if (currentPrice > maValue) {
+                    maBadge.innerHTML = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800 border border-green-200">Hausse</span>';
+                } else {
+                    maBadge.innerHTML = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">Baisse</span>';
+                }
+            }
+
+            if (rsiValue) {
+                document.getElementById('rsi-val').innerText = rsiValue.toFixed(1);
+                const rsiBadge = document.getElementById('rsi-badge');
+                if (rsiValue > 70) {
+                    rsiBadge.innerHTML = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">Suracheté</span>';
+                } else if (rsiValue < 30) {
+                    rsiBadge.innerHTML = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800 border border-green-200">Survendu</span>';
+                } else {
+                    rsiBadge.innerHTML = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600 border border-gray-200">Neutre</span>';
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const ticker = '{{ company.ticker }}';
+
+            try {
+                const response = await fetch(`/api/chart/data/${encodeURIComponent(ticker)}`);
+                if (!response.ok) throw new Error(`Erreur HTTP: ${response.status}`);
+                const data = await response.json();
+
+                if (!data.prices || data.prices.length === 0) {
+                    document.getElementById('spinner').classList.add('hidden');
+                    document.getElementById('loader-text').innerHTML = 'Aucune donnée boursière disponible.';
+                    return;
+                }
+
+                const formattedPrices = data.prices.map(p => ({
+                    time: p.time, open: parseFloat(p.open), high: parseFloat(p.high), low: parseFloat(p.low), close: parseFloat(p.close)
+                }));
+
+                const validDates = new Set(formattedPrices.map(p => p.time));
+                const closePrices = formattedPrices.map(p => p.close);
+
+                // Calcul MA
+                let maPeriod = formattedPrices.length >= 200 ? 200 : (formattedPrices.length >= 50 ? 50 : null);
+                const maData = [];
+                if (maPeriod) {
+                    document.getElementById('ma-label').textContent = `Moyenne Mobile (${maPeriod}j)`;
+                    for (let i = maPeriod - 1; i < formattedPrices.length; i++) {
+                        let sum = 0;
+                        for (let j = 0; j < maPeriod; j++) sum += closePrices[i - j];
+                        maData.push({ time: formattedPrices[i].time, value: sum / maPeriod });
+                    }
+                } else {
+                    document.getElementById('toggle-ma').disabled = true;
+                    document.getElementById('ma-label').textContent = `MA indisponible`;
+                }
+
+                // Calcul RSI 14
+                const rsiData = [];
+                for (let i = 14; i < formattedPrices.length; i++) {
+                    let gains = 0, losses = 0;
+                    for (let j = 0; j < 14; j++) {
+                        const diff = closePrices[i - j] - closePrices[i - j - 1];
+                        if (diff > 0) gains += diff; else losses -= diff;
+                    }
+                    const avgLoss = losses / 14;
+                    rsiData.push({ time: formattedPrices[i].time, value: avgLoss === 0 ? 100 : 100 - (100 / (1 + ((gains / 14) / avgLoss))) });
+                }
+
+                const currentPrice = closePrices[closePrices.length - 1];
+                const currentMa = maData.length > 0 ? maData[maData.length - 1].value : null;
+                const currentRsi = rsiData.length > 0 ? rsiData[rsiData.length - 1].value : null;
+                updateTechSummary(currentPrice, currentMa, currentRsi, maPeriod);
+
+                const uniqueInsiders = [...new Set(data.transactions.map(tx => tx.insider_name))];
+                const activeFilters = new Set(uniqueInsiders);
+
+                if (uniqueInsiders.length > 0) {
+                    document.getElementById('chart-controls').classList.remove('hidden');
+                    const filterContainer = document.getElementById('insider-filters');
+                    uniqueInsiders.forEach(name => {
+                        const btn = document.createElement('button');
+                        btn.className = 'px-3 py-1 text-xs font-bold bg-brand text-white border border-brand rounded-full transition-colors truncate max-w-[150px]';
+                        const nameParts = name.split(' ');
+                        btn.textContent = nameParts.length > 1 ? `${nameParts[0]} ${nameParts[nameParts.length - 1]}` : name;
+
+                        btn.addEventListener('click', () => {
+                            if (activeFilters.has(name)) {
+                                activeFilters.delete(name);
+                                btn.className = 'px-3 py-1 text-xs font-bold bg-white text-gray-500 border border-gray-300 rounded-full transition-colors truncate max-w-[150px]';
+                            } else {
+                                activeFilters.add(name);
+                                btn.className = 'px-3 py-1 text-xs font-bold bg-brand text-white border border-brand rounded-full transition-colors truncate max-w-[150px]';
+                            }
+                            refreshMarkers();
+                        });
+                        filterContainer.appendChild(btn);
+                    });
+                }
+
+                document.getElementById('chart-loader').classList.add('hidden');
+
+                const mainChartContainer = document.getElementById('main-chart');
+                const rsiChartContainer = document.getElementById('rsi-chart');
+                mainChartContainer.classList.remove('hidden');
+                rsiChartContainer.classList.remove('hidden');
+
+                // DÉFINITION DYNAMIQUE DES HAUTEURS (Règle le bug de l'axe X coupé sur mobile)
+                const isMobile = window.innerWidth < 640;
+                const chartHeight = isMobile ? 350 : 450;
+                const rsiHeight = isMobile ? 180 : 200;
+
+                // Création des graphiques
+                const mainChart = LightweightCharts.createChart(mainChartContainer, {
+                    height: chartHeight,
+                    layout: { background: { color: '#ffffff' }, textColor: '#333' },
+                    grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+                    rightPriceScale: { borderColor: '#d1d5db' },
+                    timeScale: {
+                        borderColor: '#d1d5db',
+                        fixLeftEdge: true,
+                        fixRightEdge: true,
+                        visible: true
+                    },
+                    width: mainChartContainer.clientWidth,
+                });
+
+                const rsiChart = LightweightCharts.createChart(rsiChartContainer, {
+                    height: rsiHeight,
+                    layout: { background: { color: '#ffffff' }, textColor: '#333' },
+                    grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+                    rightPriceScale: { borderColor: '#d1d5db' },
+                    timeScale: {
+                        borderColor: '#d1d5db',
+                        fixLeftEdge: true,
+                        fixRightEdge: true,
+                        visible: true
+                    },
+                    width: rsiChartContainer.clientWidth,
+                });
+
+                const candleSeries = mainChart.addCandlestickSeries({ upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444' });
+                candleSeries.setData(formattedPrices);
+
+                const maSeries = mainChart.addLineSeries({
+                    color: '#2563eb',
+                    lineWidth: 2,
+                    title: maPeriod ? `MA ${maPeriod}` : 'MA'
+                });
+                if (maPeriod) maSeries.setData(maData);
+
+                const rsiLineSeries = rsiChart.addLineSeries({
+                    color: '#8b5cf6',
+                    lineWidth: 2,
+                    title: 'RSI 14'
+                });
+                rsiLineSeries.setData(rsiData);
+
+                // Lignes horizontales rouges et vertes
+                rsiLineSeries.createPriceLine({
+                    price: 70, color: '#ef4444', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'Suracheté',
+                });
+
+                rsiLineSeries.createPriceLine({
+                    price: 30, color: '#10b981', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'Survendu',
+                });
+
+                document.getElementById('toggle-ma').addEventListener('change', e => maSeries.applyOptions({ visible: e.target.checked }));
+
+                function refreshMarkers() {
+                    const markers = [];
+                    data.transactions.forEach(tx => {
+                        if (!activeFilters.has(tx.insider_name)) return;
+                        let txDate = tx.time;
+                        if (!validDates.has(txDate)) {
+                            const validArray = Array.from(validDates);
+                            const pastDates = validArray.filter(d => new Date(d) <= new Date(txDate));
+                            if (pastDates.length > 0) {
+                                txDate = pastDates[pastDates.length - 1];
+                            }
+                        }
+                        if (validDates.has(txDate)) {
+                            markers.push({
+                                time: txDate,
+                                position: tx.type === 'P' ? 'belowBar' : 'aboveBar',
+                                color: tx.type === 'P' ? '#10b981' : '#ef4444',
+                                shape: tx.type === 'P' ? 'arrowUp' : 'arrowDown',
+                                text: tx.type === 'P' ? 'Achat' : 'Vente',
+                                size: isMobile ? 1 : 2 // Marqueurs légèrement plus discrets sur mobile
+                            });
+                        }
+                    });
+                    markers.sort((a, b) => new Date(a.time) - new Date(b.time));
+                    candleSeries.setMarkers(markers);
+                }
+                refreshMarkers();
+
+                mainChart.timeScale().subscribeVisibleTimeRangeChange(range => rsiChart.timeScale().setVisibleRange(range));
+                rsiChart.timeScale().subscribeVisibleTimeRangeChange(range => mainChart.timeScale().setVisibleRange(range));
+                mainChart.timeScale().fitContent();
+
+                // GESTION DU RESIZE SÉCURISÉE
+                const wrapper = document.getElementById('main-chart-container').parentElement;
+                new ResizeObserver(entries => {
+                    if (entries.length === 0) return;
+                    const newWidth = document.getElementById('main-chart-container').clientWidth;
+                    if (newWidth > 0) {
+                        mainChart.applyOptions({ width: newWidth });
+                        rsiChart.applyOptions({ width: newWidth });
+                    }
+                }).observe(wrapper);
+
+            } catch (e) {
+                document.getElementById('chart-loader').innerHTML = `<span class="text-red-500 font-bold px-4">Erreur graphique : vérifiez votre connexion réseau.</span>`;
+            }
+        });
+    </script>
+{% endblock %}

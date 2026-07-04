@@ -3,113 +3,249 @@
 {% block title %}Tableau de bord - ClearTrade{% endblock %}
 
 {% block content %}
-    <div class="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900">Activité des Initiés (Insiders)</h1>
-            <p class="text-gray-500 mt-2">Vue agrégée par jour des transactions (P et S) extraites de la SEC.</p>
+    <!-- En-tête épurée -->
+    <div class="mb-6">
+        <div class="flex flex-col md:flex-row md:justify-between md:items-end gap-2">
+            <h1 class="text-2xl sm:text-3xl font-bold text-gray-900">Activité des Initiés</h1>
+            <p class="text-xs text-gray-400">Dernière SEC : <span class="font-mono">{{ lastIngestionId ?: 'Aucun' }}</span></p>
         </div>
-        <div class="text-right">
-            <p class="text-xs text-gray-400 mb-2">Dernier formulaire lu : <span class="font-mono">{{ lastIngestionId ?: 'Aucun' }}</span></p>
-            <a href="/ingest" class="inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-brand hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand transition-colors">
-                Forcer la mise à jour SEC
-            </a>
-        </div>
+        <p class="text-sm text-gray-500 mt-1">Vue agrégée par jour des transactions (P et S) extraites de la SEC.</p>
     </div>
 
     <!-- Filtres de recherche -->
-    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6">
-        <form method="GET" action="/" class="flex flex-col sm:flex-row gap-4 items-end">
-            <div class="w-full sm:w-auto">
-                <label for="ticker" class="block text-sm font-medium text-gray-700 mb-1">Ticker (Symbole)</label>
-                <input type="text" name="ticker" id="ticker" value="{{ filters.ticker }}" placeholder="Ex: AAPL" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border p-2">
-            </div>
-            <div class="w-full sm:w-auto">
-                <label for="type" class="block text-sm font-medium text-gray-700 mb-1">Type de transaction</label>
-                <select name="type" id="type" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border p-2 bg-white">
-                    <option value="">Tous (P & S)</option>
-                    <option value="P" {% if filters.type == 'P' %}selected{% endif %}>Achats (P)</option>
-                    <option value="S" {% if filters.type == 'S' %}selected{% endif %}>Ventes (S)</option>
-                </select>
-            </div>
-            <div class="w-full sm:w-auto">
-                <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-brand bg-blue-50 hover:bg-blue-100 transition-colors">
-                    Filtrer
-                </button>
-            </div>
-            {% if filters.ticker or filters.type %}
-                <div class="w-full sm:w-auto">
-                    <a href="/" class="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors">
-                        Réinitialiser
-                    </a>
+    <div class="bg-white p-3 sm:p-4 rounded-xl shadow-sm border border-gray-200 mb-6">
+        <div class="flex flex-col lg:flex-row gap-4">
+
+            <!-- Recherche Initié (AJAX) -->
+            <div class="w-full lg:w-1/3 relative" id="insider-search-container">
+                <label for="insider_search" class="hidden sm:flex text-sm font-medium text-gray-700 mb-1 items-center gap-2">
+                    <svg class="w-4 h-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    Rechercher un Initié
+                </label>
+                <div class="relative">
+                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none sm:hidden">
+                        <svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                    </div>
+                    <input type="text" id="insider_search" placeholder="Rechercher un initié (ex: Tim Cook)..." class="block w-full h-[42px] pl-9 sm:pl-3 rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border py-2" autocomplete="off">
                 </div>
-            {% endif %}
-        </form>
+                <ul id="insider_results" class="absolute z-50 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm hidden"></ul>
+            </div>
+
+            <!-- Les filtres classiques + Période -->
+            <form method="GET" action="/" class="w-full lg:w-4/5 flex flex-col xl:flex-row flex-wrap gap-2 sm:gap-3 items-end border-t lg:border-t-0 lg:border-l border-gray-100 lg:pl-6 pt-3 sm:pt-0">
+
+                <div class="w-full sm:w-auto flex-1 min-w-[120px]">
+                    <label for="ticker" class="hidden sm:block text-sm font-medium text-gray-700 mb-1">Ticker</label>
+                    <input type="text" name="ticker" id="ticker" value="{{ filters.ticker }}" placeholder="Ticker (Ex: AAPL)" class="block w-full h-[42px] rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border px-3">
+                </div>
+
+                <div class="w-full sm:w-auto flex-1 min-w-[150px]">
+                    <label for="type" class="hidden sm:block text-sm font-medium text-gray-700 mb-1">Transaction</label>
+                    <select name="type" id="type" class="block w-full h-[42px] rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border px-2 bg-white">
+                        <option value="">Tous les types (P & S)</option>
+                        <option value="P" {% if filters.type == 'P' %}selected{% endif %}>Achats (P)</option>
+                        <option value="S" {% if filters.type == 'S' %}selected{% endif %}>Ventes (S)</option>
+                    </select>
+                </div>
+
+                <div class="w-full sm:w-auto flex-1 min-w-[160px]">
+                    <label for="industry" class="hidden sm:block text-sm font-medium text-gray-700 mb-1">Secteur / Industrie</label>
+                    <select name="industry" id="industry" class="block w-full h-[42px] rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand sm:text-sm border px-2 bg-white max-h-60 overflow-y-auto">
+                        <option value="">Toutes les industries</option>
+                        {% for sector, industries in sectorsTree %}
+                            <optgroup label="{{ sector }}">
+                                {% for industry in industries %}
+                                    <option value="{{ industry }}" {% if filters.industry == industry %}selected{% endif %}>
+                                        {{ industry }}
+                                    </option>
+                                {% endfor %}
+                            </optgroup>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- NOUVEAU FILTRE DE DATES (Compact en inline) -->
+                <div class="w-full sm:w-auto flex-none">
+                    <label class="hidden sm:block text-sm font-medium text-gray-700 mb-1">Période (Début - Fin)</label>
+                    <div class="flex items-center gap-1 sm:gap-2">
+                        <input type="date" name="start_date" value="{{ filters.start_date }}" class="block w-full sm:w-[130px] h-[42px] rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand text-xs sm:text-sm border px-1 sm:px-2 bg-white" title="Date de début">
+                        <span class="text-gray-400 text-xs sm:text-sm">à</span>
+                        <input type="date" name="end_date" value="{{ filters.end_date }}" class="block w-full sm:w-[130px] h-[42px] rounded-md border-gray-300 shadow-sm focus:border-brand focus:ring-brand text-xs sm:text-sm border px-1 sm:px-2 bg-white" title="Date de fin">
+                    </div>
+                </div>
+
+                <!-- Boutons d'action -->
+                <div class="w-full sm:w-auto flex gap-2 mt-1 sm:mt-0">
+                    <button type="submit" class="flex-1 sm:flex-none h-[42px] inline-flex justify-center items-center px-4 border border-transparent text-sm font-medium rounded-md text-brand bg-blue-50 hover:bg-blue-100 transition-colors">
+                        Filtrer
+                    </button>
+
+                    <!-- Affichage dynamique du bouton Reset si les dates changent ou si un filtre est actif -->
+                    {% set default_start = 'now'|date_modify('-30 days')|date('Y-m-d') %}
+                    {% set default_end = 'now'|date('Y-m-d') %}
+                    {% if filters.ticker or filters.type or filters.industry or filters.start_date != default_start or filters.end_date != default_end %}
+                        <a href="/" class="flex-none w-[42px] h-[42px] inline-flex justify-center items-center border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors" title="Réinitialiser">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        </a>
+                    {% endif %}
+
+                    {% if filters.ticker %}
+                        <a href="/company/{{ filters.ticker|upper }}" class="flex-none w-[42px] h-[42px] inline-flex justify-center items-center border border-purple-200 text-sm font-medium rounded-md text-purple-700 bg-purple-50 hover:bg-purple-100 transition-colors group" title="Analyse Détaillée">
+                            <svg class="h-5 w-5 text-purple-600 group-hover:text-purple-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
+                            </svg>
+                        </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
     </div>
+
+    <!-- Script Javascript pour la recherche AJAX -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('insider_search');
+            const resultsList = document.getElementById('insider_results');
+            let timeoutId;
+
+            searchInput.addEventListener('input', function(e) {
+                const query = e.target.value;
+                clearTimeout(timeoutId);
+
+                if (query.length < 2) {
+                    resultsList.classList.add('hidden');
+                    return;
+                }
+
+                timeoutId = setTimeout(() => {
+                    fetch(`/api/insiders/search?q=${encodeURIComponent(query)}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            resultsList.innerHTML = '';
+                            if (data.length === 0) {
+                                resultsList.innerHTML = '<li class="text-gray-500 cursor-default select-none relative py-2 pl-3 pr-9">Aucun initié trouvé</li>';
+                            } else {
+                                data.forEach(insider => {
+                                    const li = document.createElement('li');
+                                    li.className = 'text-gray-900 cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-brand hover:text-white transition-colors';
+                                    li.innerHTML = `<span class="block truncate font-medium">${insider.name}</span>`;
+                                    li.addEventListener('click', () => {
+                                        window.location.href = `/insider/${insider.id}`;
+                                    });
+                                    resultsList.appendChild(li);
+                                });
+                            }
+                            resultsList.classList.remove('hidden');
+                        });
+                }, 300);
+            });
+
+            document.addEventListener('click', function(e) {
+                if (!document.getElementById('insider-search-container').contains(e.target)) {
+                    resultsList.classList.add('hidden');
+                }
+            });
+        });
+    </script>
 
     <!-- Tableau des transactions agrégées -->
     <div class="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden mb-6">
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
+        <div class="w-full overflow-x-auto">
+            <table class="w-full divide-y divide-gray-200 block lg:table">
+
+                <thead class="bg-gray-50 hidden lg:table-header-group">
                 <tr>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Entreprise</th>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Initié</th>
-                    <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume Total</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Prix Moyen</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Valeur Totale</th>
-                    <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                    <th scope="col" class="w-1 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Date</th>
+                    <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Entreprise</th>
+                    <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Initié</th>
+                    <th scope="col" class="w-1 px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Type</th>
+                    <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume</th>
+                    <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Prix Moyen</th>
+                    <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Valeur Totale</th>
+                    <th scope="col" class="w-1 px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Lignes</th>
                 </tr>
                 </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
+
+                <tbody class="bg-white divide-y divide-gray-200 block lg:table-row-group">
                 {% for tx in transactions %}
-                    <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
-                            {{ tx.transaction_date|date("d/m/Y") }}
+                    <tr class="hover:bg-gray-50 transition-colors cursor-pointer grid grid-cols-3 lg:table-row border-b border-gray-200 lg:border-b-0 p-3 lg:p-0 gap-x-2 gap-y-1"
+                        onclick="window.location.href='/details?date={{ tx.transaction_date }}&company={{ tx.company_id }}&insider={{ tx.insider_id }}&type={{ tx.transaction_code }}'">
+
+                        <!-- Ligne 1 Mobile -->
+                        <td class="block lg:table-cell px-1 lg:px-4 py-0.5 lg:py-4 col-span-2 whitespace-nowrap">
+                            <div class="text-sm font-bold text-gray-900">
+                                {{ tx.transaction_date|date("d/m/Y") }}
+                            </div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-bold text-gray-900">{{ tx.ticker }}</div>
-                            <div class="text-sm text-gray-500 truncate max-w-[150px]" title="{{ tx.company_name }}">{{ tx.company_name }}</div>
+
+                        <td class="block lg:table-cell px-1 lg:px-4 py-0.5 lg:py-4 col-span-3 lg:col-span-1 border-b border-dashed border-gray-200 pb-2 mb-1 lg:border-0 lg:pb-4 lg:mb-0">
+                            <div class="break-words">
+                                <!-- Lien mis à jour pour conserver les dates de filtres -->
+                                <a href="/?ticker={{ tx.ticker }}&type=&start_date={{ filters.start_date }}&end_date={{ filters.end_date }}" onclick="event.stopPropagation();" class="text-sm font-bold text-brand hover:text-blue-800 hover:underline transition-colors">
+                                    {{ tx.ticker }}
+                                </a>
+                                <span class="text-xs text-gray-500 ml-1 leading-tight">{{ tx.company_name }}</span>
+                            </div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm text-gray-900 font-medium">{{ tx.insider_name }}</div>
+
+                        <td class="block lg:table-cell px-1 lg:px-4 py-0.5 lg:py-4 col-span-3 lg:col-span-1 border-b border-dashed border-gray-200 pb-2 mb-1 lg:border-0 lg:pb-4 lg:mb-0">
+                            <div class="break-words">
+                                <a href="/insider/{{ tx.insider_id }}"  onclick="event.stopPropagation();" class="text-sm font-bold text-brand hover:text-blue-800 hover:underline transition-colors">
+                                    {{ tx.insider_name }}
+                                </a>
+                                <span class="text-xs text-gray-400 bg-gray-50 border border-gray-100 px-1 py-0.5 rounded ml-1">{{ tx.title|default('Director') }}</span>
+                            </div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
+
+                        <td class="block lg:table-cell px-1 lg:px-4 py-0.5 lg:py-4 col-span-1 lg:text-center text-right whitespace-nowrap row-start-1 col-start-3 lg:row-auto lg:col-auto">
                             {% if tx.transaction_code == 'P' %}
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                    Achat (P)
-                                </span>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold bg-green-100 text-green-800">Achat (P)</span>
                             {% elseif tx.transaction_code == 'S' %}
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                                    Vente (S)
-                                </span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <div class="text-sm text-gray-900 font-medium">{{ tx.total_shares|number_format(0, ',', ' ') }}</div>
-                            {% if tx.transaction_count > 1 %}
-                                <div class="text-xs text-gray-400 mt-1">en {{ tx.transaction_count }} txs</div>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold bg-red-100 text-red-800">Vente (S)</span>
                             {% else %}
-                                <div class="text-xs text-gray-400 mt-1">en 1 tx</div>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold bg-gray-100 text-gray-800">{{ tx.transaction_code }}</span>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                            ${{ tx.avg_price_per_share|number_format(2, '.', ',') }}
+
+                        <!-- Ligne Finale Mobile : Volume | Prix | Valeur -->
+                        <td class="block lg:table-cell px-1 lg:px-4 py-1 lg:py-4 lg:text-right">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase lg:hidden mb-0.5">Volume</div>
+                            <div class="text-sm font-medium text-gray-900 break-words">{{ tx.total_shares|number_format(0, ',', ' ') }}</div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 text-right">
-                            ${{ (tx.total_shares * tx.avg_price_per_share)|number_format(0, '.', ' ') }}
+
+                        <td class="block lg:table-cell px-1 lg:px-4 py-1 lg:py-4 lg:text-right">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase lg:hidden mb-0.5">Prix Moyen</div>
+                            <div class="font-medium text-gray-900 text-sm break-words">${{ tx.avg_price_per_share|number_format(4, '.', ',') }}</div>
+
+                            {% if tx.market_price and (tx.avg_price_per_share > tx.market_price * 1.5) %}
+                                <div class="mt-0.5 flex items-center lg:justify-end text-red-600 group relative cursor-help">
+                                    <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                    <span class="text-[10px] font-bold">Anomalie SEC</span>
+
+                                    <!-- Bulle explicative au survol (Restaurée) -->
+                                    <div class="hidden group-hover:block absolute bottom-full right-0 mb-2 w-48 sm:w-64 p-2 bg-gray-900 text-white text-xs font-normal rounded shadow-lg z-50 whitespace-normal text-left">
+                                        Prix déclaré très supérieur au cours de bourse ce jour-là (${{ tx.market_price|number_format(2, '.', ',') }}). Il s'agit probablement d'une erreur de saisie du déclarant ou de l'achat d'actions préférentielles.
+                                    </div>
+                                </div>
+                            {% endif %}
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                            <a href="/details?date={{ tx.transaction_date }}&company={{ tx.company_id }}&insider={{ tx.insider_id }}&type={{ tx.transaction_code }}" class="text-brand hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors text-xs">
-                                Détails
-                            </a>
+
+                        <td class="block lg:table-cell px-1 lg:px-4 py-1 lg:py-4 lg:text-right">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase lg:hidden mb-0.5">Valeur</div>
+                            <div class="text-sm font-bold text-gray-900 break-words">${{ (tx.total_shares * tx.avg_price_per_share)|number_format(0, '.', ' ') }}</div>
+                        </td>
+
+                        <td class="hidden lg:table-cell px-4 py-4 whitespace-nowrap text-center text-sm text-gray-500">
+                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-xs font-medium text-gray-600" title="Nombre de lignes">
+                                {{ tx.transaction_count }}
+                            </span>
                         </td>
                     </tr>
                 {% else %}
-                    <tr>
-                        <td colspan="8" class="px-6 py-10 text-center text-gray-500">
-                            Aucune transaction trouvée pour ces critères.
+                    <tr class="block lg:table-row">
+                        <td colspan="8" class="block lg:table-cell px-6 py-12 text-center text-sm text-gray-500">
+                            <svg class="mx-auto h-12 w-12 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                            Aucune transaction trouvée pour ces filtres.
                         </td>
                     </tr>
                 {% endfor %}
@@ -118,21 +254,17 @@
         </div>
     </div>
 
-    <!-- Pagination -->
+    <!-- Pagination avec conservation des filtres Date -->
     {% if totalPages > 1 %}
-        <div class="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 rounded-xl shadow-sm border mb-8">
-
-            <!-- Pagination pour Mobile -->
-            <div class="flex flex-1 justify-between sm:hidden">
+        <div class="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 rounded-xl shadow-sm mb-8">
+            <div class="flex flex-1 justify-between sm:hidden w-full">
                 {% if currentPage > 1 %}
-                    <a href="?page={{ currentPage - 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Précédent</a>
+                    <a href="?page={{ currentPage - 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}&industry={{ filters.industry }}&start_date={{ filters.start_date }}&end_date={{ filters.end_date }}" class="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Précédent</a>
                 {% endif %}
                 {% if currentPage < totalPages %}
-                    <a href="?page={{ currentPage + 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative ml-auto inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Suivant</a>
+                    <a href="?page={{ currentPage + 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}&industry={{ filters.industry }}&start_date={{ filters.start_date }}&end_date={{ filters.end_date }}" class="relative ml-auto inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Suivant</a>
                 {% endif %}
             </div>
-
-            <!-- Pagination pour Desktop -->
             <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
                 <div>
                     <p class="text-sm text-gray-700">
@@ -142,15 +274,10 @@
                 <div>
                     <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
                         {% if currentPage > 1 %}
-                            <a href="?page={{ currentPage - 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative inline-flex items-center rounded-l-md px-4 py-2 text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 font-medium text-sm transition-colors">
-                                &laquo; Précédent
-                            </a>
+                            <a href="?page={{ currentPage - 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}&industry={{ filters.industry }}&start_date={{ filters.start_date }}&end_date={{ filters.end_date }}" class="relative inline-flex items-center rounded-l-md px-4 py-2 text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 font-medium text-sm transition-colors">&laquo; Précédent</a>
                         {% endif %}
-
                         {% if currentPage < totalPages %}
-                            <a href="?page={{ currentPage + 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}" class="relative inline-flex items-center {% if currentPage <= 1 %}rounded-l-md{% endif %} rounded-r-md px-4 py-2 text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 font-medium text-sm transition-colors">
-                                Suivant &raquo;
-                            </a>
+                            <a href="?page={{ currentPage + 1 }}&ticker={{ filters.ticker }}&type={{ filters.type }}&industry={{ filters.industry }}&start_date={{ filters.start_date }}&end_date={{ filters.end_date }}" class="relative inline-flex items-center {% if currentPage <= 1 %}rounded-l-md{% endif %} rounded-r-md px-4 py-2 text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 font-medium text-sm transition-colors">Suivant &raquo;</a>
                         {% endif %}
                     </nav>
                 </div>

@@ -15,6 +15,56 @@ class IngestionModel
         $this->db = $db;
     }
 
+    /**
+     * NOUVEAU : Nettoyage et normalisation du ticker "à la volée" (Le Vaccin)
+     */
+    private function cleanTickerData(string $originalTicker, string $companyName): array
+    {
+        $t = trim($originalTicker);
+
+        // 1. Nettoyage des préfixes (NYSE:, etc.)
+        $t = preg_replace('/^(NYSE|NASDAQ|ASX|AMEX|OTC|CBOE):\s*/i', '', $t);
+
+        // 2. Multi-tickers (on garde le premier)
+        if (preg_match('/^([A-Z0-9\-\.]+)(?:\s+|,|\/|AND)/i', $t, $matches)) {
+            $t = $matches[1];
+        }
+
+        // 3. Classes d'actions
+        if (strtoupper($t) === 'NA' && stripos($companyName, 'Nano Labs') !== false) {
+            // Vrai Nano Labs, on ne touche à rien
+        } else {
+            // Remplacement du point par un tiret pour Yahoo (ex: BRK.B -> BRK-B)
+            $t = preg_replace('/\.([A-Z0-9])$/i', '-$1', $t);
+        }
+
+        $t = strtoupper(trim($t));
+
+        // 4. Détection Poubelles et Fonds
+        $isGarbage = false;
+        $reason = null;
+
+        if (empty($t) || in_array($t, ['NONE', 'NULL', 'N/A', 'NON-ASSIGN', 'AB-LEND'])) {
+            $isGarbage = true; $reason = 'Ticker invalide textuel';
+        } elseif (is_numeric($t) || strlen($t) > 8) {
+            $isGarbage = true; $reason = 'Numéro CIK ou code erroné';
+        } elseif ($t === 'NA') {
+            $isGarbage = true; $reason = 'Faux ticker NA';
+        } elseif (preg_match('/-(PR[A-Z]?|P[A-Z]?|W|R|U)$/i', $t)) {
+            $isGarbage = true; $reason = 'Actions préférentielles / Warrants';
+        } elseif (strlen($t) === 5 && str_ends_with($t, 'X')) {
+            $isGarbage = true; $reason = 'Fonds Commun (Mutual Fund)';
+        } elseif (stripos($companyName, 'Fund') !== false || stripos($companyName, 'Trust') !== false) {
+            $isGarbage = true; $reason = 'Fonds d\'investissement / Trust non standard';
+        }
+
+        if ($isGarbage) {
+            return ['ticker' => 'NON-COTE', 'sector' => 'NON-COTE', 'industry' => $reason];
+        }
+
+        return ['ticker' => $t, 'sector' => null, 'industry' => null];
+    }
+
     public function getLastProcessedId(): ?string
     {
         $stmt = $this->db->query("SELECT value FROM system_settings WHERE key_name = 'last_accession_number'");
@@ -41,8 +91,17 @@ class IngestionModel
             $companyId = $stmt->fetchColumn();
 
             if (!$companyId) {
-                $stmt = $this->db->prepare("INSERT INTO companies (cik, name, ticker) VALUES (:cik, :name, :ticker)");
-                $stmt->execute($issuerData);
+                // APPLICATION DU VACCIN : On nettoie le ticker AVANT l'insertion
+                $cleanData = $this->cleanTickerData($issuerData['ticker'], $issuerData['name']);
+
+                $stmt = $this->db->prepare("INSERT INTO companies (cik, name, ticker, sector, industry) VALUES (:cik, :name, :ticker, :sector, :industry)");
+                $stmt->execute([
+                    'cik' => $issuerData['cik'],
+                    'name' => $issuerData['name'],
+                    'ticker' => $cleanData['ticker'],
+                    'sector' => $cleanData['sector'],
+                    'industry' => $cleanData['industry']
+                ]);
                 $companyId = $this->db->lastInsertId();
             }
 
@@ -61,9 +120,9 @@ class IngestionModel
             $insertedCount = 0;
             $stmtTx = $this->db->prepare("
                 INSERT IGNORE INTO transactions 
-                (accession_number, line_index, company_id, insider_id, transaction_date, transaction_code, shares, price_per_share, officer_title, remarks, footnotes) 
+                (accession_number, line_index, company_id, insider_id, transaction_date, transaction_code, shares, price_per_share, shares_owned_following, direct_or_indirect, is_10b51, officer_title, remarks, footnotes) 
                 VALUES 
-                (:acc_num, :line_idx, :comp_id, :ins_id, :tx_date, :tx_code, :shares, :price, :title, :remarks, :footnotes)
+                (:acc_num, :line_idx, :comp_id, :ins_id, :tx_date, :tx_code, :shares, :price, :shares_following, :direct_or_indirect, :is_10b51, :title, :remarks, :footnotes)
             ");
 
             // Tableau pour garder en mémoire les jours modifiés
@@ -92,12 +151,13 @@ class IngestionModel
             if (!empty($aggregateKeys)) {
                 $stmtAgg = $this->db->prepare("
                     INSERT INTO transactions_jour 
-                    (transaction_date, company_id, insider_id, transaction_code, total_shares, avg_price_per_share, transaction_count)
+                    (transaction_date, company_id, insider_id, transaction_code, total_shares, avg_price_per_share, transaction_count, is_10b51, officer_title)
                     SELECT 
                         transaction_date, company_id, insider_id, transaction_code,
                         SUM(shares) as total_shares,
                         SUM(shares * price_per_share) / SUM(shares) as avg_price_per_share,
-                        COUNT(*) as transaction_count
+                        COUNT(*) as transaction_count,
+                        MAX(is_10b51) as is_10b51, officer_title
                     FROM transactions
                     WHERE company_id = :comp_id 
                       AND insider_id = :ins_id 
@@ -107,7 +167,9 @@ class IngestionModel
                     ON DUPLICATE KEY UPDATE 
                         total_shares = VALUES(total_shares),
                         avg_price_per_share = VALUES(avg_price_per_share),
-                        transaction_count = VALUES(transaction_count)
+                        transaction_count = VALUES(transaction_count),
+                        is_10b51 = VALUES(is_10b51),
+                        officer_title = VALUES(officer_title)               
                 ");
 
                 foreach (array_keys($aggregateKeys) as $key) {

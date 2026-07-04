@@ -259,6 +259,187 @@ class AnalysisService
         return $jsonResponse;
     }
 
+    /**
+     * NOUVELLE FONCTION : Analyse le profil complet d'un initié
+     */
+    public function analyzeInsiderProfile(int $insiderId, ?int $companyId = null): array
+    {
+        // 1. Bouclier Anti-Spam : Vérifier si on a déjà fait cette analyse aujourd'hui
+        $sqlCheck = "SELECT id FROM insider_ai_profiles WHERE insider_id = :iid AND DATE(analysis_date) = CURDATE()";
+        $paramsCheck = ['iid' => $insiderId];
+
+        if ($companyId) {
+            $sqlCheck .= " AND company_id = :cid";
+            $paramsCheck['cid'] = $companyId;
+        } else {
+            $sqlCheck .= " AND company_id IS NULL";
+        }
+
+        $stmtCheck = $this->db->prepare($sqlCheck);
+        $stmtCheck->execute($paramsCheck);
+
+        if ($stmtCheck->fetchColumn()) {
+            throw new Exception("Une analyse de profil a déjà été générée aujourd'hui pour cette configuration. Revenez demain !");
+        }
+
+        // 2. Extraction des Data Points
+
+        // A. Infos de base de l'initié
+        $stmtInsider = $this->db->prepare("SELECT name FROM insiders WHERE id = :id");
+        $stmtInsider->execute(['id' => $insiderId]);
+        $insiderName = $stmtInsider->fetchColumn();
+
+        // B. Statistiques de réussite (Win Rates)
+        $stmtStats = $this->db->prepare("SELECT * FROM insider_stats WHERE insider_id = :id");
+        $stmtStats->execute(['id' => $insiderId]);
+        $stats = $stmtStats->fetch() ?: null;
+
+        // C. Ratio d'activité (Achats vs Ventes)
+        $sqlRatio = "SELECT transaction_code, COUNT(*) as count FROM transactions_jour WHERE insider_id = :iid";
+        if ($companyId) $sqlRatio .= " AND company_id = " . (int)$companyId;
+        $sqlRatio .= " GROUP BY transaction_code";
+        $stmtRatio = $this->db->prepare($sqlRatio);
+        $stmtRatio->execute(['iid' => $insiderId]);
+        $ratios = $stmtRatio->fetchAll(PDO::FETCH_KEY_PAIR);
+        $buys = $ratios['P'] ?? 0;
+        $sells = $ratios['S'] ?? 0;
+
+        // D. Les 20 dernières transactions pour la dynamique récente
+        $sqlActivity = "
+            SELECT tj.transaction_date, tj.transaction_code, tj.total_shares, tj.avg_price_per_share, c.ticker
+            FROM transactions_jour tj
+            JOIN companies c ON tj.company_id = c.id
+            WHERE tj.insider_id = :iid
+        ";
+        $paramsActivity = ['iid' => $insiderId];
+
+        $targetTicker = "Toutes entreprises";
+        if ($companyId) {
+            $sqlActivity .= " AND tj.company_id = :cid";
+            $paramsActivity['cid'] = $companyId;
+
+            $stmtC = $this->db->prepare("SELECT ticker FROM companies WHERE id = :cid");
+            $stmtC->execute(['cid' => $companyId]);
+            $targetTicker = $stmtC->fetchColumn();
+        }
+
+        $sqlActivity .= " ORDER BY tj.transaction_date DESC LIMIT 20";
+        $stmtActivity = $this->db->prepare($sqlActivity);
+        $stmtActivity->execute($paramsActivity);
+        $recentTrades = $stmtActivity->fetchAll();
+
+        // E. NOUVEAU : Extraction de tous les postes occupés (CFO, Director, etc.)
+        $sqlTitles = "SELECT DISTINCT officer_title FROM transactions WHERE insider_id = :iid AND officer_title IS NOT NULL";
+        if ($companyId) {
+            $sqlTitles .= " AND company_id = " . (int)$companyId;
+        }
+        $stmtTitles = $this->db->prepare($sqlTitles);
+        $stmtTitles->execute(['iid' => $insiderId]);
+        $titles = $stmtTitles->fetchAll(PDO::FETCH_COLUMN);
+
+        // Nettoyage et formatage (ex: "Director, CFO")
+        $cleanTitles = array_filter(array_map('trim', $titles));
+        $rolesStr = empty($cleanTitles) ? "Non spécifié" : implode(', ', $cleanTitles);
+
+        // F. NOUVEAU : Effet de meute (Cluster Buying)
+        $clusterInfo = "";
+        if ($companyId) {
+            // On cherche si D'AUTRES dirigeants ont ACHETÉ des actions de cette entreprise dans les 30 derniers jours
+            $stmtCluster = $this->db->prepare("
+                SELECT COUNT(DISTINCT insider_id) 
+                FROM transactions_jour 
+                WHERE company_id = :cid 
+                  AND insider_id != :iid 
+                  AND transaction_code = 'P' 
+                  AND transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            ");
+            $stmtCluster->execute(['cid' => $companyId, 'iid' => $insiderId]);
+            $otherBuyersCount = (int)$stmtCluster->fetchColumn();
+
+            if ($otherBuyersCount > 0) {
+                $clusterInfo = "\n--- CONTEXTE D'ENTREPRISE (CLUSTER BUYING) ---\n- ALERTE : Dans les 30 derniers jours, {$otherBuyersCount} AUTRE(S) dirigeant(s) de cette même entreprise ont également acheté des actions ! C'est un signal fort de 'Cluster Buying' (effet de meute).\n";
+            }
+        }
+
+        // 3. Construction du Super-Prompt
+        $contextText = "Initié : {$insiderName}\n";
+        $contextText .= "Poste(s) occupé(s) historiquement : {$rolesStr}\n"; // Injection des rôles
+        $contextText .= "Cible de l'analyse : {$targetTicker}\n";
+
+        $contextText .= "\n--- STATISTIQUES DE REUSSITE HISTORIQUES (WIN RATES) ---\n";
+        if ($stats) {
+            $contextText .= "- Taux de réussite de ses trades à 3 mois : " . ($stats['win_rate_3m'] ?? 'N/A') . "%\n";
+            $contextText .= "- Taux de réussite de ses trades à 6 mois : " . ($stats['win_rate_6m'] ?? 'N/A') . "%\n";
+            $contextText .= "- Rendement moyen généré à 6 mois : " . ($stats['avg_return_6m'] ?? 'N/A') . "%\n";
+            $contextText .= "- Volume total de trades sur lequel se base cette statistique : " . max((int)$stats['total_trades_3m'], (int)$stats['total_trades_6m']) . " trades.\n";
+        } else {
+            $contextText .= "Pas assez d'historique de prix pour calculer une statistique de réussite.\n";
+        }
+
+        $contextText .= "\n--- RATIO D'ACTIVITÉ ---\n";
+        $contextText .= "- Nombre d'achats sur le marché libre (P) : {$buys}\n";
+        $contextText .= "- Nombre de ventes sur le marché libre (S) : {$sells}\n";
+
+        $contextText .= "\n--- 20 DERNIÈRES TRANSACTIONS RÉCENTES ---\n";
+        if (empty($recentTrades)) {
+            $contextText .= "Aucune transaction récente trouvée.\n";
+        } else {
+            foreach ($recentTrades as $t) {
+                $typeStr = $t['transaction_code'] === 'P' ? 'ACHAT' : 'VENTE';
+                $contextText .= "- {$t['transaction_date']} | {$t['ticker']} | {$typeStr} | " . number_format($t['total_shares'], 0, ',', ' ') . " actions à $" . number_format($t['avg_price_per_share'], 2) . "\n";
+            }
+        }
+
+        // Injection de l'effet de meute à la fin du contexte
+        $contextText .= $clusterInfo;
+
+        $systemPrompt = "Tu es un profiler financier expert en 'Insider Trading'. Ta mission est d'évaluer le comportement, la fiabilité et la stratégie d'un dirigeant en fonction de son historique boursier.
+        Règles d'or :
+        1. Un dirigeant vend souvent pour diversifier son patrimoine, payer des impôts ou acheter une maison. Une vente n'est pas forcément négative.
+        2. En revanche, un dirigeant n'achète que s'il croit fermement en la hausse de son entreprise. Les achats sont des signaux forts.
+        3. Prends en compte son 'Poste'. Un achat de CEO ou CFO (qui connaissent les finances) a beaucoup plus de poids qu'un 'Director' indépendant.
+        4. Si d'autres dirigeants achètent en même temps (Cluster Buying), c'est un signal extrêmement positif qu'il faut souligner.
+        5. Utilise son 'Taux de réussite' (Win Rate) pour juger s'il anticipe bien le marché. Un Win Rate > 60% est excellent.
+        6. Si l'historique total est trop faible (moins de 3 transactions au total), tu DOIS retourner un signal NEUTRAL avec une confiance faible (<30%) en expliquant que l'échantillon est insuffisant.
+        
+        Réponds UNIQUEMENT au format JSON strict avec les clés suivantes :
+        - 'signal_type' : Doit être exactement 'BULLISH', 'BEARISH' ou 'NEUTRAL'.
+        - 'confidence_score' : Un entier entre 0 et 100.
+        - 'rationale' : Un texte argumenté, professionnel et incisif en français (environ 4 à 6 phrases) expliquant ton verdict psychologique et stratégique.";
+
+        $userPrompt = "Analyse le profil de ce dirigeant avec les données suivantes :\n\n" . $contextText;
+
+        // 4. Appel à l'API (On force le modèle PRO car c'est du raisonnement global)
+        $jsonResponse = $this->callDeepSeekApi($systemPrompt, $userPrompt, self::MODEL_PRO);
+
+        // Sécurisation des clés (au cas où le LLM renvoie 'signal' au lieu de 'signal_type')
+        $signalType = $jsonResponse['signal_type'] ?? $jsonResponse['signal'] ?? 'NEUTRAL';
+        $confidence = (int)($jsonResponse['confidence_score'] ?? 0);
+        $rationale = $jsonResponse['rationale'] ?? "Impossible de parser l'explication de l'IA.";
+
+        if (!in_array($signalType, ['BULLISH', 'BEARISH', 'NEUTRAL'])) {
+            $signalType = 'NEUTRAL';
+        }
+
+        // 5. Sauvegarde du profil IA en base de données
+        $stmtInsert = $this->db->prepare("
+            INSERT INTO insider_ai_profiles 
+            (insider_id, company_id, signal_type, confidence_score, rationale, model_version) 
+            VALUES (:iid, :cid, :stype, :score, :rationale, :model)
+        ");
+
+        $stmtInsert->execute([
+            'iid' => $insiderId,
+            'cid' => $companyId,
+            'stype' => $signalType,
+            'score' => $confidence,
+            'rationale' => $rationale,
+            'model' => self::MODEL_PRO
+        ]);
+
+        return $jsonResponse;
+    }
+
     private function callDeepSeekApi(string $systemPrompt, string $userPrompt, string $model): array
     {
         $url = 'https://api.deepseek.com/chat/completions';

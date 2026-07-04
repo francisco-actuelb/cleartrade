@@ -1,254 +1,229 @@
 <?php
 // /var/www/ct.hsrv.fr/bin/backfill.php
 
-// Ce script est conçu pour être exécuté en ligne de commande (CLI).
-// Il télécharge l'historique massif des formulaires SEC.
 require __DIR__ . '/../vendor/autoload.php';
 
 use Dotenv\Dotenv;
 use App\Models\IngestionModel;
+use App\Services\SecFetcherService;
 
-// 1. Initialisation de l'environnement et connexion BDD
-if (file_exists(__DIR__ . '/../.env')) {
-    $dotenv = Dotenv::createImmutable(__DIR__ . '/../');
-    $dotenv->load();
+if ($argc < 3) {
+    die("Usage: php backfill.php YYYY-MM-DD YYYY-MM-DD\nExemple: php backfill.php 2025-07-01 2025-12-31\n");
 }
 
-$host = $_ENV['DB_HOST'] ?? '127.0.0.1';
-$db   = $_ENV['DB_NAME'] ?? 'cleartrade';
-$user = $_ENV['DB_USER'] ?? 'ct_user';
-$pass = $_ENV['DB_PASS'] ?? '';
+$startDate = $argv[1];
+$endDate = $argv[2];
 
-$dsn = "mysql:host=$host;dbname=$db;charset=utf8mb4";
-$options = [
-    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+// Initialisation
+$dotenv = Dotenv::createImmutable(__DIR__ . '/../');
+$dotenv->load();
+
+$host = $_ENV['DB_HOST'];
+$db   = $_ENV['DB_NAME'];
+$user = $_ENV['DB_USER'];
+$pass = $_ENV['DB_PASS'];
+
+$pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-];
-
-try {
-    $pdo = new PDO($dsn, $user, $pass, $options);
-} catch (PDOException $e) {
-    die("ERREUR CRITIQUE : Connexion BDD impossible - " . $e->getMessage() . "\n");
-}
+]);
 
 $model = new IngestionModel($pdo);
+$fetcher = new SecFetcherService();
 
-// 2. Configuration du rattrapage via les arguments CLI (Ligne de commande)
-if ($argc !== 3) {
-    echo "=================================================\n";
-    echo " ERREUR : Paramètres manquants\n";
-    echo " Usage   : php bin/backfill.php <date_debut> <date_fin>\n";
-    echo " Exemple : php bin/backfill.php 2025-07-01 2025-07-31\n";
-    echo "=================================================\n";
-    exit(1);
-}
+echo "========================================================\n";
+echo " BACKFILL HISTORIQUE SEC ({$startDate} au {$endDate})\n";
+echo "========================================================\n";
 
-try {
-    $startDate = new DateTime($argv[1]);
-    $endDate = new DateTime($argv[2]);
-} catch (Exception $e) {
-    die("ERREUR : Format de date invalide. Veuillez utiliser AAAA-MM-JJ.\n");
-}
+// NOUVELLE STRATÉGIE : On itère sur les entreprises valides de notre BDD
+// Cela permet de contourner la limitation "getcurrent" de la SEC
+$stmt = $pdo->query("SELECT id, cik, ticker, name FROM companies WHERE sector != 'NON-COTE' AND sector != 'INCONNU' ORDER BY ticker");
+$companies = $stmt->fetchAll();
 
-if ($startDate > $endDate) {
-    die("ERREUR : La date de début doit être antérieure ou égale à la date de fin.\n");
-}
+echo "Nombre d'entreprises à scanner : " . count($companies) . "\n\n";
 
-echo "=================================================\n";
-echo " DÉMARRAGE DU RATTRAPAGE SEC (BACKFILL)\n";
-echo " Période : " . $startDate->format('Y-m-d') . " au " . $endDate->format('Y-m-d') . "\n";
-echo "=================================================\n";
+$dateEndFormatted = str_replace('-', '', $endDate);
+$options = ['http' => ['header' => "User-Agent: ClearTrade (contact@hsrv.fr)\r\n"]];
+$context = stream_context_create($options);
 
-$interval = new DateInterval('P1D');
-// On clone $endDate pour ne pas la modifier de façon permanente lors de l'ajout du jour supplémentaire
-$period = new DatePeriod($startDate, $interval, (clone $endDate)->modify('+1 day'));
+$totalFormsProcessed = 0;
+$totalTransactionsInserted = 0;
+$apiCalls = 0;
 
-$optionsHttp = [
-    'http' => [
-        'header' => "User-Agent: ClearTrade Backfill (contact@hsrv.fr)\r\n"
-    ]
-];
-$context = stream_context_create($optionsHttp);
+foreach ($companies as $company) {
+    $cik = $company['cik'];
+    $ticker = $company['ticker'];
 
-// Fonction locale pour parser le XML depuis un lien TXT direct
-function fetchAndParseXmlFromTxt($txtUrl, $context) {
-    $rawText = @file_get_contents($txtUrl, false, $context);
-    if (!$rawText) return null;
+    // Le CIK doit souvent être paddé à 10 chiffres pour l'URL
+    $cikPad = str_pad($cik, 10, '0', STR_PAD_LEFT);
 
-    if (preg_match('/<XML>(.*?)<\/XML>/s', $rawText, $matches)) {
-        $xmlString = trim($matches[1]);
-        $xmlString = preg_replace('/<\?xml.*\?>/', '', $xmlString);
-        try {
-            return new \SimpleXMLElement($xmlString);
-        } catch (\Exception $e) {
-            return null;
-        }
-    }
-    return null;
-}
+    $startOffset = 0;
+    $keepFetching = true;
+    $companyFormsCount = 0;
 
-$totalJours = 0;
-$totalFormulaires = 0;
-$totalTransactions = 0;
+    echo "Scan de [$ticker]... ";
 
-// 3. Boucle sur chaque jour de la période
-foreach ($period as $date) {
-    $year = $date->format('Y');
-    $month = (int)$date->format('m');
-    $dateStr = $date->format('Ymd');
+    while ($keepFetching) {
+        // Changement crucial : action=getcompany permet de remonter le temps avec dateb
+        $url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={$cikPad}&type=4&dateb={$dateEndFormatted}&owner=include&start={$startOffset}&count=100&output=atom";
 
-    // Calcul du trimestre (Q1, Q2, Q3, Q4) pour l'URL SEC
-    $quarter = ceil($month / 3);
-    $qStr = "QTR" . $quarter;
+        $rssContent = @file_get_contents($url, false, $context);
+        $apiCalls++;
+        usleep(150000); // Pause de 150ms obligatoire (Max 10 requêtes / sec chez la SEC)
 
-    // URL de l'index quotidien de la SEC
-    $idxUrl = "https://www.sec.gov/Archives/edgar/daily-index/$year/$qStr/form.$dateStr.idx";
+        if (!$rssContent) break;
 
-    echo "[" . $date->format('Y-m-d') . "] Téléchargement de l'index... ";
-
-    $idxContent = @file_get_contents($idxUrl, false, $context);
-    usleep(150000); // Pause respectueuse (150ms)
-
-    if (!$idxContent) {
-        echo "Aucun fichier (probablement un week-end/jour férié).\n";
-        continue;
-    }
-
-    $totalJours++;
-    $lignes = explode("\n", $idxContent);
-    $form4Urls = [];
-
-    // On cherche les lignes qui commencent exactement par "4 " (le formulaire Form 4)
-    foreach ($lignes as $ligne) {
-        if (strpos($ligne, '4 ') === 0) {
-            // L'URL se trouve à la fin de la ligne, ex: edgar/data/320193/0000320193-25-000001.txt
-            if (preg_match('/(edgar\/data\/[0-9]+\/[0-9\-]+\.txt)/', $ligne, $matches)) {
-                $form4Urls[] = "https://www.sec.gov/Archives/" . $matches[1];
-            }
-        }
-    }
-
-    $nbForms = count($form4Urls);
-    echo "$nbForms Form 4 trouvés.\n";
-
-    if ($nbForms === 0) continue;
-
-    $insertedCeJour = 0;
-
-    // 4. Traitement de chaque Form 4 de la journée
-    foreach ($form4Urls as $i => $txtUrl) {
-        // Affichage de la progression (% calculé)
-        if ($i % 50 === 0) {
-            $pct = round(($i / $nbForms) * 100);
-            echo "   -> Progression jour : $pct% ($i/$nbForms)\n";
+        $xmlRss = new \SimpleXMLElement($rssContent);
+        if (!isset($xmlRss->entry) || count($xmlRss->entry) == 0) {
+            break; // Plus aucun résultat pour cette entreprise
         }
 
-        // Extraction du Accession Number depuis l'URL
-        $accessionNumber = '';
-        if (preg_match('/([0-9]{10}-[0-9]{2}-[0-9]{6})\.txt$/', $txtUrl, $matches)) {
-            $accessionNumber = $matches[1];
-        } else {
-            continue;
-        }
+        foreach ($xmlRss->entry as $entry) {
+            $updatedStr = (string)$entry->updated;
+            $entryDate = substr($updatedStr, 0, 10);
 
-        $xml = fetchAndParseXmlFromTxt($txtUrl, $context);
-        usleep(150000); // 150ms de pause obligatoire = max ~6 requêtes par seconde
-
-        if (!$xml) continue;
-
-        // Préparation des données
-        $issuerData = [
-            'cik' => (string)$xml->issuer->issuerCik,
-            'name' => (string)$xml->issuer->issuerName,
-            'ticker' => (string)$xml->issuer->issuerTradingSymbol
-        ];
-
-        $reportingOwner = isset($xml->reportingOwner[0]) ? $xml->reportingOwner[0] : $xml->reportingOwner;
-
-        $ownerData = [
-            'cik' => (string)$xml->reportingOwner->reportingOwnerId->rptOwnerCik,
-            'name' => (string)$xml->reportingOwner->reportingOwnerId->rptOwnerName
-        ];
-
-        // Si le CIK est introuvable, c'est un formulaire invalide, on passe au suivant.
-        if (empty($issuerData['cik']) || empty($ownerData['cik'])) {
-            continue;
-        }
-
-        // --- NOUVEAU : Extraction des Remarks et Footnotes ---
-        $remarks = isset($xml->remarks) ? trim((string)$xml->remarks) : null;
-
-        $footnotesMap = [];
-        if (isset($xml->footnotes->footnote)) {
-            foreach ($xml->footnotes->footnote as $fn) {
-                $id = (string)$fn['id'];
-                $footnotesMap[$id] = trim((string)$fn);
-            }
-        }
-        // -----------------------------------------------------
-
-        if (!isset($xml->nonDerivativeTable->nonDerivativeTransaction)) {
-            continue; // Pas de transactions classiques, on ignore
-        }
-
-        $transactionsData = [];
-        $title = isset($xml->reportingOwner->reportingOwnerRelationship->officerTitle)
-            ? (string)$xml->reportingOwner->reportingOwnerRelationship->officerTitle
-            : 'Director';
-
-        $index = 0;
-        foreach ($xml->nonDerivativeTable->nonDerivativeTransaction as $tx) {
-            $tx_code = (string)$tx->transactionCoding->transactionCode;
-
-            // FILTRE STRATÉGIQUE : On ne garde QUE les Achats (P) et les Ventes (S) sur le marché ouvert
-            if (!in_array($tx_code, ['P', 'S'])) {
-                continue;
+            // Le flux est trié du plus récent au plus ancien
+            if ($entryDate < $startDate) {
+                $keepFetching = false;
+                break; // On est remonté trop loin, on passe à l'entreprise suivante
             }
 
-            if (isset($tx->transactionAmounts->transactionShares->value)) {
+            // Le formulaire est dans notre fenêtre de tir !
+            if ($entryDate >= $startDate && $entryDate <= $endDate) {
+                $rawId = (string)$entry->id;
+                if (preg_match('/([0-9]{10}-[0-9]{2}-[0-9]{6})/', $rawId, $matches)) {
+                    $accessionNumber = $matches[1];
+                } else {
+                    $accessionNumber = preg_replace('/^urn:.*:/', '', $rawId);
+                }
 
-                // --- NOUVEAU : Trouver les notes de bas de page liées à cette transaction ---
-                $lineFootnotes = [];
-                $footnoteNodes = $tx->xpath('.//footnoteId');
-                if ($footnoteNodes !== false) {
-                    foreach ($footnoteNodes as $fnNode) {
-                        $fnId = (string)$fnNode['id'];
-                        if (isset($footnotesMap[$fnId])) {
-                            $lineFootnotes[] = "[Note {$fnId}] : " . $footnotesMap[$fnId];
-                        }
+                $link = '';
+                foreach ($entry->link as $l) {
+                    if (isset($l['href'])) { $link = (string)$l['href']; break; }
+                }
+                if (empty($link)) continue;
+
+                // Téléchargement du XML complet
+                $xml = $fetcher->fetchForm4Xml($link);
+                $apiCalls++;
+                usleep(150000);
+
+                if (!$xml) continue;
+
+                // CORRECTION : Extraction sécurisée des données de l'émetteur
+                $issuerData = [
+                    'cik' => isset($xml->issuer->issuerCik) ? (string)$xml->issuer->issuerCik : '',
+                    'name' => isset($xml->issuer->issuerName) ? (string)$xml->issuer->issuerName : 'UNKNOWN',
+                    'ticker' => isset($xml->issuer->issuerTradingSymbol) ? (string)$xml->issuer->issuerTradingSymbol : 'UNKNOWN'
+                ];
+
+                // CORRECTION DES WARNINGS : On vérifie la chaîne complète
+                // En PHP, isset($a->b->c) protège contre l'erreur "property on null" typique avec SimpleXML
+                if (!isset($xml->reportingOwner[0]->reportingOwnerId)) {
+                    continue;
+                }
+
+                $ownerCik = isset($xml->reportingOwner[0]->reportingOwnerId->rptOwnerCik) ? (string)$xml->reportingOwner[0]->reportingOwnerId->rptOwnerCik : '0000000000';
+                $ownerName = isset($xml->reportingOwner[0]->reportingOwnerId->rptOwnerName) ? (string)$xml->reportingOwner[0]->reportingOwnerId->rptOwnerName : 'UNKNOWN';
+
+                $ownerData = [
+                    'cik' => $ownerCik,
+                    'name' => $ownerName
+                ];
+
+                $remarks = isset($xml->remarks) ? trim((string)$xml->remarks) : null;
+                $footnotesMap = [];
+                if (isset($xml->footnotes->footnote)) {
+                    foreach ($xml->footnotes->footnote as $fn) {
+                        $footnotesMap[(string)$fn['id']] = trim((string)$fn);
                     }
                 }
-                $footnotesText = !empty($lineFootnotes) ? implode("\n", $lineFootnotes) : null;
-                // -----------------------------------------------------------------------------
 
-                $transactionsData[] = [
-                    'line_idx' => $index,
-                    'tx_date'  => (string)$tx->transactionDate->value,
-                    'tx_code'  => $tx_code,
-                    'shares'   => (int)$tx->transactionAmounts->transactionShares->value,
-                    'price'    => (float)($tx->transactionAmounts->transactionPricePerShare->value ?? 0),
-                    'title'    => $title,
-                    'remarks'  => $remarks, // Ajout
-                    'footnotes'=> $footnotesText // Ajout
-                ];
+                if (!isset($xml->nonDerivativeTable->nonDerivativeTransaction)) continue;
+
+                $transactionsData = [];
+
+                // CORRECTION : Sécurisation du rôle de la même manière
+                $title = 'Director';
+                if (isset($xml->reportingOwner[0]->reportingOwnerRelationship->officerTitle)) {
+                    $title = (string)$xml->reportingOwner[0]->reportingOwnerRelationship->officerTitle;
+                }
+
+                $index = 0;
+                foreach ($xml->nonDerivativeTable->nonDerivativeTransaction as $tx) {
+                    $tx_code = (string)$tx->transactionCoding->transactionCode;
+                    $price = (float)($tx->transactionAmounts->transactionPricePerShare->value ?? 0);
+
+                    if (!in_array($tx_code, ['P', 'S']) || $price <= 0) {
+                        $index++; continue;
+                    }
+
+                    if (isset($tx->transactionAmounts->transactionShares->value)) {
+                        $lineFootnotes = [];
+                        $footnoteNodes = $tx->xpath('.//footnoteId');
+                        if ($footnoteNodes !== false) {
+                            foreach ($footnoteNodes as $fnNode) {
+                                $fnId = (string)$fnNode['id'];
+                                if (isset($footnotesMap[$fnId])) {
+                                    $lineFootnotes[] = "[Note {$fnId}] : " . $footnotesMap[$fnId];
+                                }
+                            }
+                        }
+                        $footnotesText = !empty($lineFootnotes) ? implode("\n", $lineFootnotes) : null;
+
+                        $sharesFollowing = isset($tx->postTransactionAmounts->sharesOwnedFollowingTransaction->value)
+                            ? (int)$tx->postTransactionAmounts->sharesOwnedFollowingTransaction->value : 0;
+
+                        $dirInd = isset($tx->ownershipNature->directOrIndirectOwnership->value)
+                            ? (string)$tx->ownershipNature->directOrIndirectOwnership->value : 'D';
+
+                        $is10b51 = 0;
+                        if (isset($tx->rule10b51Transaction) && in_array(strtolower((string)$tx->rule10b51Transaction), ['1', 'true'])) {
+                            $is10b51 = 1;
+                        }
+                        if (!$is10b51) {
+                            $combinedText = ($footnotesText ?? '') . ' ' . ($remarks ?? '');
+                            if (preg_match('/10b5[- ]1/i', $combinedText)) $is10b51 = 1;
+                        }
+
+                        $transactionsData[] = [
+                            'line_idx' => $index,
+                            'tx_date'  => (string)$tx->transactionDate->value,
+                            'tx_code'  => $tx_code,
+                            'shares'   => (int)$tx->transactionAmounts->transactionShares->value,
+                            'price'    => $price,
+                            'title'    => $title,
+                            'remarks'  => $remarks,
+                            'footnotes'=> $footnotesText,
+                            'shares_following' => $sharesFollowing,
+                            'direct_or_indirect' => $dirInd,
+                            'is_10b51' => $is10b51
+                        ];
+                    }
+                    $index++;
+                }
+
+                if (!empty($transactionsData)) {
+                    $insertedCount = $model->processForm4($accessionNumber, $issuerData, $ownerData, $transactionsData);
+                    $totalTransactionsInserted += $insertedCount;
+                    $companyFormsCount++;
+                    $totalFormsProcessed++;
+                }
             }
-            $index++;
         }
 
-        if (!empty($transactionsData)) {
-            $insertedCount = $model->processForm4($accessionNumber, $issuerData, $ownerData, $transactionsData);
-            $insertedCeJour += $insertedCount;
-            $totalTransactions += $insertedCount;
+        if ($keepFetching) {
+            $startOffset += 100;
+            // Sécurité anti-boucle infinie (2000 formulaires max par entreprise sur la période)
+            if ($startOffset >= 2000) break;
         }
-        $totalFormulaires++;
     }
 
-    echo "   => Fin de journée : $insertedCeJour transactions pertinentes (P/S) ajoutées.\n";
+    if ($companyFormsCount > 0) echo "$companyFormsCount formulaires trouvés.\n";
+    else echo "Aucun mouvement.\n";
 }
 
-echo "=================================================\n";
-echo " RATTRAPAGE TERMINÉ ! \n";
-echo " Jours avec activité SEC : $totalJours\n";
-echo " Formulaires analysés    : $totalFormulaires\n";
-echo " Transactions insérées   : $totalTransactions\n";
-echo "=================================================\n";
+echo "\n--- BILAN DU BACKFILL ---\n";
+echo "Appels API SEC : $apiCalls\n";
+echo "Formulaires analysés : $totalFormsProcessed\n";
+echo "Transactions ajoutées à la BDD : $totalTransactionsInserted\n";

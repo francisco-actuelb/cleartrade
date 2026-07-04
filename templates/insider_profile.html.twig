@@ -1,0 +1,166 @@
+{% extends "base.html.twig" %}
+
+{% block title %}Profil Initié: {{ insider.name }} - ClearTrade{% endblock %}
+
+{% block content %}
+    <div class="mb-6">
+        <a href="/" class="inline-flex items-center text-sm font-medium text-brand hover:text-blue-800 mb-4 transition-colors">
+            &laquo; Retour au tableau de bord
+        </a>
+    </div>
+
+    <!-- En-tête du Profil et Statistiques Globales -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div>
+                <h1 class="text-3xl font-extrabold text-gray-900 mb-2">{{ insider.name }}</h1>
+                <p class="text-sm text-gray-500 font-mono">CIK: {{ insider.cik }}</p>
+            </div>
+
+            {% if stats %}
+                <div class="flex flex-wrap gap-4">
+                    <div class="bg-blue-50 border border-blue-100 rounded-lg p-4 text-center min-w-[120px]">
+                        <div class="text-xs font-semibold text-blue-600 uppercase mb-1">Win Rate (3M)</div>
+                        <div class="text-2xl font-bold text-gray-900">
+                            {% if stats.win_rate_3m is not null %}{{ stats.win_rate_3m }}%{% else %}N/A{% endif %}
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1">sur {{ stats.total_trades_3m }} trades</div>
+                    </div>
+                    <div class="bg-indigo-50 border border-indigo-100 rounded-lg p-4 text-center min-w-[120px]">
+                        <div class="text-xs font-semibold text-indigo-600 uppercase mb-1">Win Rate (6M)</div>
+                        <div class="text-2xl font-bold text-gray-900">
+                            {% if stats.win_rate_6m is not null %}{{ stats.win_rate_6m }}%{% else %}N/A{% endif %}
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1">sur {{ stats.total_trades_6m }} trades</div>
+                    </div>
+                    <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center min-w-[120px]">
+                        <div class="text-xs font-semibold text-gray-600 uppercase mb-1">Rendement Moy. (6M)</div>
+                        <div class="text-2xl font-bold {% if stats.avg_return_6m > 0 %}text-green-600{% elseif stats.avg_return_6m < 0 %}text-red-600{% else %}text-gray-900{% endif %}">
+                            {% if stats.avg_return_6m is not null %}{{ stats.avg_return_6m > 0 ? '+' : '' }}{{ stats.avg_return_6m }}%{% else %}N/A{% endif %}
+                        </div>
+                    </div>
+                </div>
+            {% else %}
+                <div class="text-sm text-gray-500 italic bg-gray-50 p-4 rounded-lg">
+                    Pas encore assez d'historique boursier pour calculer les statistiques de réussite de cet initié.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+        <!-- Colonne Principale : Activité par Ticker -->
+        <div class="lg:col-span-2">
+            <h2 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <svg class="w-6 h-6 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+                Répartition du portefeuille
+            </h2>
+
+            <div class="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Entreprise</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Jours de Trading</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Volume Total</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action IA</th>
+                    </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                    {% for t in tickers %}
+                        <tr>
+                            <td class="px-6 py-4">
+                                <!-- Ticker cliquable vers le profil entreprise -->
+                                <a href="/company/{{ t.ticker }}" class="font-bold text-brand hover:underline block">{{ t.ticker }}</a>
+                                <span class="text-xs text-gray-500">{{ t.company_name }}</span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-900 font-bold">{{ t.total_days_traded }}</td>
+                            <td class="px-6 py-4 text-sm text-gray-500">{{ t.total_volume|number_format(0, ',', ' ') }} actions</td>
+                            <td class="px-6 py-4 text-right">
+                                <form method="POST" action="/insider/{{ insider.id }}/analyze">
+                                    <input type="hidden" name="company_id" value="{{ t.company_id }}">
+                                    <button type="submit" class="text-xs font-bold text-purple-600 bg-purple-50 hover:bg-purple-100 px-3 py-1 rounded-full transition-colors">
+                                        Analyser (Ticker)
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="4" class="px-6 py-8 text-center text-gray-500">Aucune transaction enregistrée.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Action Globale -->
+            <div class="mt-4 text-right">
+                <form method="POST" action="/insider/{{ insider.id }}/analyze">
+                    <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-bold rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-colors">
+                        <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        Générer un profil IA global
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Colonne Latérale : Historique des Profils IA -->
+        <div>
+            <h2 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                Analyses IA
+            </h2>
+
+            {% if latest_profile %}
+                <!-- La dernière analyse mise en avant -->
+                <div class="bg-gradient-to-br from-[#f4f0ff] to-white border border-purple-200 p-5 rounded-xl shadow-sm mb-6 relative overflow-hidden">
+                    <div class="text-xs font-bold text-purple-500 uppercase mb-2 tracking-wider">
+                        Dernier Rapport ({{ latest_profile.analysis_date|date("d/m/Y") }})
+                        {% if latest_profile.ticker %}• Cible: {{ latest_profile.ticker }}{% else %}• Global{% endif %}
+                    </div>
+
+                    <div class="flex items-center gap-3 mb-4">
+                        {% if latest_profile.signal_type == 'BULLISH' %}
+                            <span class="px-3 py-1 rounded-md text-sm font-bold bg-green-100 text-green-800">BULLISH</span>
+                        {% elseif latest_profile.signal_type == 'BEARISH' %}
+                            <span class="px-3 py-1 rounded-md text-sm font-bold bg-red-100 text-red-800">BEARISH</span>
+                        {% else %}
+                            <span class="px-3 py-1 rounded-md text-sm font-bold bg-gray-100 text-gray-800">NEUTRAL</span>
+                        {% endif %}
+
+                        <span class="text-sm font-bold text-gray-700">Confiance: {{ latest_profile.confidence_score }}%</span>
+                    </div>
+
+                    <p class="text-sm text-gray-700 leading-relaxed italic border-l-2 border-purple-300 pl-3">
+                        "{{ latest_profile.rationale }}"
+                    </p>
+                </div>
+
+                <!-- Liste des analyses précédentes -->
+                {% if profiles|length > 1 %}
+                    <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">Historique</h3>
+                    <div class="space-y-3">
+                        {% for p in profiles|slice(1) %}
+                            <div class="bg-white border border-gray-200 p-3 rounded-lg text-sm flex justify-between items-center hover:border-purple-300 transition-colors">
+                                <div>
+                                    <div class="font-medium text-gray-900">{{ p.analysis_date|date("d/m/y") }}</div>
+                                    <div class="text-xs text-gray-500">{% if p.ticker %}{{ p.ticker }}{% else %}Global{% endif %}</div>
+                                </div>
+                                <div class="text-right">
+                        <span class="font-bold {% if p.signal_type == 'BULLISH' %}text-green-600{% elseif p.signal_type == 'BEARISH' %}text-red-600{% else %}text-gray-600{% endif %}">
+                            {{ p.signal_type }}
+                        </span>
+                                    <div class="text-xs text-gray-500">{{ p.confidence_score }}%</div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% else %}
+                <div class="bg-gray-50 border border-gray-200 p-6 rounded-xl text-center text-gray-500 text-sm">
+                    Aucun profil psychologique généré pour cet initié. Cliquez sur un bouton "Analyser" pour interroger DeepSeek.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

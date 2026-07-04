@@ -19,35 +19,71 @@ $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
 ]);
 
+// NOUVEAU : Instanciation du service multi-sources
+$finnhubKey = $_ENV['FINNHUB_API_KEY'] ?? '';
+$profileService = new \App\Services\CompanyProfileService($finnhubKey);
+
 echo "Démarrage de la synchronisation intelligente via YAHOO FINANCE...\n";
 
-// 2. Récupérer la liste des entreprises uniques ayant des transactions
+// NOUVEAU : On ajoute une colonne invisible 'meta_updated_at' virtuellement gérée
+// Pour savoir quelles entreprises ont besoin d'un rafraîchissement des métadonnées
+// (On va utiliser la date de création de l'entreprise si le secteur est NULL)
 $stmt = $pdo->query("
-    SELECT DISTINCT c.ticker 
+    SELECT c.id, c.ticker, c.sector 
     FROM companies c
     JOIN transactions_jour tj ON c.id = tj.company_id
-    -- WHERE c.ticker > 'ADTN'
+    GROUP BY c.id, c.ticker, c.sector
 ");
-$tickers = $stmt->fetchAll(PDO::FETCH_COLUMN);
+$companies = $stmt->fetchAll();
 
-echo "Nombre d'entreprises à vérifier : " . count($tickers) . "\n";
+echo "Nombre d'entreprises à vérifier : " . count($companies) . "\n";
 
 $apiCalls = 0;
 $totalInserted = 0;
+$today = time();
 
-foreach ($tickers as $ticker) {
-    // Nettoyage TRÈS strict du ticker
+foreach ($companies as $company) {
+    $ticker = $company['ticker'];
     $cleanTicker = preg_replace('/[^A-Za-z0-9\-\.]/', '', trim($ticker));
     $cleanTicker = strtoupper($cleanTicker);
 
     if (empty($cleanTicker)) continue;
 
-    // INITIATIVE : Smart Delta Sync
+    // NOUVEAU : PROTECTION ANTI-SPAM POUR YAHOO
+    // Si l'entreprise est marquée NON-COTE ou INCONNU, on ne tente même pas de récupérer les prix !
+    if ($cleanTicker === 'NON-COTE' || $company['sector'] === 'NON-COTE' || $company['sector'] === 'INCONNU') {
+        continue;
+    }
+
+    // OPTIMISATION : On ne télécharge les métadonnées QUE SI le secteur est inconnu
+    if (empty($company['sector'])) {
+        $apiCalls++;
+        $profile = $profileService->getProfile($cleanTicker);
+
+        if ($profile !== null) {
+            // MISE A JOUR MAJEURE : On sauvegarde 'shares_outstanding' au lieu de 'market_cap'
+            $stmtUpdateMeta = $pdo->prepare("UPDATE companies SET sector = :s, shares_outstanding = :so, industry = :i WHERE id = :id");
+            $stmtUpdateMeta->execute([
+                's' => $profile['sector'],
+                'so' => $profile['shares_outstanding'],
+                'i' => $profile['industry'],
+                'id' => $company['id']
+            ]);
+            echo "[$cleanTicker] Métadonnées acquises ({$profile['source']}). ";
+        } else {
+            // AUTO-NETTOYAGE : Introuvable sur tous les fournisseurs, on le marque INCONNU pour l'ignorer demain
+            $stmtUpdateMeta = $pdo->prepare("UPDATE companies SET sector = 'INCONNU', industry = 'Introuvable sur toutes les sources' WHERE id = :id");
+            $stmtUpdateMeta->execute(['id' => $company['id']]);
+            echo "[$cleanTicker] Profil introuvable. Classé INCONNU.\n";
+            continue; // On passe à l'entreprise suivante sans chercher les prix (qui feront 404 de toute façon)
+        }
+        usleep(300000); // Pause anti-spam
+    }
+
+    // INITIATIVE : Smart Delta Sync pour les prix
     $stmtDate = $pdo->prepare("SELECT MAX(price_date) FROM stock_prices WHERE ticker = :ticker");
     $stmtDate->execute(['ticker' => $cleanTicker]);
     $lastDate = $stmtDate->fetchColumn();
-
-    $today = time();
 
     if ($lastDate) {
         $from = strtotime($lastDate);
@@ -55,22 +91,22 @@ foreach ($tickers as $ticker) {
             echo "[$cleanTicker] Déjà à jour. Ignoré.\n";
             continue;
         }
-        echo "[$cleanTicker] Mise à jour depuis le $lastDate... ";
+        echo "[$cleanTicker] MàJ depuis le $lastDate... ";
     } else {
-        // Yahoo Finance gère très bien des historiques longs. Remontons d'un an et demi par sécurité.
-        $from = strtotime('-18 months', $today);
-        echo "[$cleanTicker] Nouvel ajout. Téléchargement de l'historique... ";
+        // MODIFICATION ICI POUR 2025 :
+        // On passe à 36 mois en arrière pour garantir 200 jours de cours avant toute transaction de 2025.
+        $from = strtotime('-36 months', $today);
+        echo "[$cleanTicker] Nouvel ajout historique (36 mois)... ";
     }
 
     $to = $today;
 
-    // 3. Appel à l'API (non-officielle mais publique) de Yahoo Finance
+    // 3. Appel à l'API de prix Yahoo
     $url = "https://query1.finance.yahoo.com/v8/finance/chart/{$cleanTicker}?period1={$from}&period2={$to}&interval=1d";
 
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    // Yahoo bloque les bots sans User-Agent. On se fait passer pour Chrome.
     curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
     $response = curl_exec($ch);
@@ -82,8 +118,6 @@ foreach ($tickers as $ticker) {
     $result = $data['chart']['result'][0] ?? null;
 
     if ($httpCode === 200 && $result && isset($result['timestamp'])) {
-
-        // PROTECTION : Try...Catch pour éviter tout crash (ex: valeurs hors limites)
         try {
             $pdo->beginTransaction();
 
@@ -103,7 +137,6 @@ foreach ($tickers as $ticker) {
             $quotes = $result['indicators']['quote'][0];
 
             foreach ($timestamps as $index => $timestamp) {
-                // Parfois Yahoo retourne des valeurs nulles si la bourse a fermé plus tôt, on les ignore
                 if (!isset($quotes['close'][$index])) continue;
 
                 $insertStmt->execute([
@@ -124,19 +157,13 @@ foreach ($tickers as $ticker) {
 
         } catch (\PDOException $e) {
             $pdo->rollBack();
-            echo "-> Échec SQL (Ignoré) : " . $e->getMessage() . "\n";
+            echo "-> Échec SQL : " . $e->getMessage() . "\n";
         }
-
     } else {
-        if ($httpCode === 404) {
-            echo "-> Ignoré : Ticker introuvable chez Yahoo Finance (Probablement racheté ou faillite).\n";
-        } else {
-            $errorMsg = $data['chart']['error']['description'] ?? "Erreur HTTP $httpCode";
-            echo "-> Échec : $errorMsg\n";
-        }
+        if ($httpCode === 404) echo "-> Ignoré : Introuvable.\n";
+        else echo "-> Échec HTTP $httpCode\n";
     }
 
-    // Pause de sécurité : Yahoo est très tolérant, 0.5s suffisent amplement.
     usleep(500000);
 }
 

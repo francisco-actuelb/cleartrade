@@ -12,14 +12,19 @@
             <div class="flex flex-col md:flex-row md:justify-between md:items-start gap-4">
                 <div>
                     <h1 class="text-2xl font-bold text-gray-900 mb-1">
-                        {{ context.insider_name }}
+                        <a href="/insider/{{ context.insider_id }}"
+                           class="text-brand hover:underline font-medium"
+                           title="{{ context.insider_name }}">
+                            {{ context.insider_name }}
+                        </a>
+
                         <span class="text-gray-500 font-normal text-lg">chez</span>
                         {{ context.ticker }}
                     </h1>
                     <p class="text-gray-600">{{ context.company_name }}</p>
                 </div>
 
-                <div class="text-right">
+                <div class="text-left md:text-right border-t border-gray-100 pt-4 md:border-0 md:pt-0">
                     <div class="text-sm text-gray-500 mb-1">Date d'exécution</div>
                     <div class="text-lg font-semibold text-gray-900">{{ date|date("d/m/Y") }}</div>
                     <div class="mt-2">
@@ -29,6 +34,61 @@
                             <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">Vente (S)</span>
                         {% endif %}
                     </div>
+                </div>
+            </div>
+
+            <!-- ENCART D'ANALYSE MA200 (CONTEXTE DU MARCHÉ) -->
+            <div class="mt-6 pt-6 border-t border-gray-100 flex flex-wrap gap-6 items-center">
+                <div>
+                    <div class="text-xs text-gray-500 uppercase font-semibold mb-1">Prix de l'opération</div>
+                    <div class="text-xl font-bold text-gray-900">${{ avg_price|number_format(2, '.', ',') }}</div>
+                </div>
+
+                <div class="hidden sm:block text-gray-300">
+                    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 5l7 7-7 7"></path></svg>
+                </div>
+
+                <div>
+                    <div class="text-xs text-gray-500 uppercase font-semibold mb-1 flex items-center gap-1">
+                        Moyenne Mobile 200j (MA200)
+                        <span class="group relative cursor-help">
+                        <svg class="h-4 w-4 text-gray-400 hover:text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <div class="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-50">
+                            La moyenne des prix de clôture sur les 200 jours précédant cette transaction.
+                        </div>
+                    </span>
+                    </div>
+                    {% if ma200 %}
+                        <div class="flex items-center gap-3">
+                            <div class="text-xl font-bold text-gray-700">${{ ma200|number_format(2, '.', ',') }}</div>
+
+                            {% set diff_pct = ((avg_price - ma200) / ma200) * 100 %}
+
+                            {% if type == 'P' %}
+                                {% if avg_price < ma200 %}
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-800 border border-green-200">
+                                    {{ diff_pct|number_format(1) }}% (Décote / Value)
+                                </span>
+                                {% else %}
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                    +{{ diff_pct|number_format(1) }}% (Momentum)
+                                </span>
+                                {% endif %}
+                            {% elseif type == 'S' %}
+                                {% if avg_price > ma200 %}
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-200">
+                                    +{{ diff_pct|number_format(1) }}% (Prise de profit)
+                                </span>
+                                {% else %}
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800 border border-red-200">
+                                    {{ diff_pct|number_format(1) }}% (Capitulation)
+                                </span>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    {% else %}
+                        <div class="text-sm text-gray-500 italic mt-1">Historique insuffisant</div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -47,11 +107,10 @@
 
     <!-- ENCART DU SIGNAL IA (DEEPSEEK) -->
     {% if ai_signal %}
-        <div class="bg-gradient-to-br from-[#f4f0ff] to-white border border-purple-200 p-6 rounded-xl shadow-sm mb-8 relative overflow-hidden">
-            <!-- Décoration de fond -->
+        <div class="bg-gradient-to-br from-[#f4f0ff] to-white border border-purple-200 p-4 sm:p-6 rounded-xl shadow-sm mb-8 relative overflow-hidden">
             <div class="absolute top-0 right-0 -mt-4 -mr-4 w-32 h-32 bg-purple-100 rounded-full opacity-50 blur-2xl pointer-events-none"></div>
 
-            <div class="flex items-center justify-between mb-4 relative z-10">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 relative z-10 gap-4">
                 <h2 class="text-lg font-bold text-gray-900 flex items-center gap-2">
                     <svg class="h-6 w-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     Analyse IA <span class="text-sm font-normal text-gray-500 ml-2">({{ ai_signal.model_version }})</span>
@@ -59,20 +118,20 @@
 
                 <div class="flex gap-4">
                     <div class="text-center">
-                        <div class="text-xs text-gray-500 uppercase font-semibold">Signal</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 uppercase font-semibold">Signal</div>
                         {% if ai_signal.signal_type == 'BULLISH' %}
-                            <span class="inline-flex items-center px-3 py-1 rounded-md text-sm font-bold bg-green-100 text-green-800 border border-green-200 mt-1">HAUSSIER (BULLISH)</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-green-100 text-green-800 mt-1">HAUSSIER (BULLISH)</span>
                         {% elseif ai_signal.signal_type == 'BEARISH' %}
-                            <span class="inline-flex items-center px-3 py-1 rounded-md text-sm font-bold bg-red-100 text-red-800 border border-red-200 mt-1">BAISSIER (BEARISH)</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-red-100 text-red-800 mt-1">BAISSIER (BEARISH)</span>
                         {% else %}
-                            <span class="inline-flex items-center px-3 py-1 rounded-md text-sm font-bold bg-gray-100 text-gray-800 border border-gray-200 mt-1">NEUTRE (NEUTRAL)</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-gray-100 text-gray-800 mt-1">NEUTRE (NEUTRAL)</span>
                         {% endif %}
                     </div>
 
                     <div class="text-center">
-                        <div class="text-xs text-gray-500 uppercase font-semibold">Confiance</div>
+                        <div class="text-[10px] sm:text-xs text-gray-500 uppercase font-semibold">Confiance</div>
                         <div class="mt-1 flex items-center justify-center">
-                        <span class="text-lg font-extrabold {% if ai_signal.confidence_score > 70 %}text-purple-700{% else %}text-gray-700{% endif %}">
+                        <span class="text-base sm:text-lg font-extrabold {% if ai_signal.confidence_score > 70 %}text-purple-700{% else %}text-gray-700{% endif %}">
                             {{ ai_signal.confidence_score }}%
                         </span>
                         </div>
@@ -87,49 +146,25 @@
         </div>
     {% endif %}
 
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <div class="flex flex-col md:flex-row md:justify-between md:items-start gap-4">
-                <div>
-                    <h1 class="text-2xl font-bold text-gray-900 mb-1">
-                        {{ context.insider_name }}
-                        <span class="text-gray-500 font-normal text-lg">chez</span>
-                        {{ context.ticker }}
-                    </h1>
-                    <p class="text-gray-600">{{ context.company_name }}</p>
-                </div>
-
-                <div class="text-right">
-                    <div class="text-sm text-gray-500 mb-1">Date d'exécution</div>
-                    <div class="text-lg font-semibold text-gray-900">{{ date|date("d/m/Y") }}</div>
-                    <div class="mt-2">
-                        {% if type == 'P' %}
-                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">Achat (P)</span>
-                        {% elseif type == 'S' %}
-                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">Vente (S)</span>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
+    <!-- Tableau des Lignes SEC Brutes (Responsive) -->
     <div class="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden mb-8">
-        <div class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
-            <h2 class="text-lg font-medium text-gray-900">Détail des {{ transactions|length }} transaction(s) brute(s)</h2>
+        <div class="px-4 sm:px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+            <h2 class="text-base sm:text-lg font-medium text-gray-900">Détail des {{ transactions|length }} transaction(s) brute(s)</h2>
         </div>
 
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-white">
+        <div class="w-full overflow-x-auto">
+            <table class="w-full divide-y divide-gray-200 block sm:table">
+                <!-- LE BUREAU N'A PAS CHANGÉ ICI -->
+                <thead class="bg-white hidden sm:table-header-group">
                 <tr>
-                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Formulaire SEC (Accession)</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume (Actions)</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Prix Unitaire</th>
-                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Valeur Ligne</th>
-                    <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Analyse IA</th>
+                    <th scope="col" class="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Formulaire SEC (Accession)</th>
+                    <th scope="col" class="px-4 sm:px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume (Actions)</th>
+                    <th scope="col" class="px-4 sm:px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Prix Unitaire</th>
+                    <th scope="col" class="px-4 sm:px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Valeur Ligne</th>
                 </tr>
                 </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
+
+                <tbody class="bg-white divide-y divide-gray-200 block sm:table-row-group">
                 {% set totalVolume = 0 %}
                 {% set totalValue = 0 %}
 
@@ -137,64 +172,71 @@
                     {% set totalVolume = totalVolume + tx.shares %}
                     {% set totalValue = totalValue + (tx.shares * tx.price_per_share) %}
 
-                    <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
-                            <!-- CORRECTION : Utilisation de tx.sec_url générée dans le Controller -->
-                            <a href="{{ tx.sec_url }}" target="_blank" class="text-brand hover:underline" title="Voir le document SEC original (Ligne {{ tx.line_index }})">
-                                {{ tx.accession_number }}
-                            </a>
-                            <span class="text-xs text-gray-400 ml-1">(L{{ tx.line_index }})</span>
+                    <!-- Mode Mobile : Grille de 3 colonnes -->
+                    <tr class="hover:bg-gray-50 transition-colors grid grid-cols-3 sm:table-row border-b border-gray-200 sm:border-b-0 p-3 sm:p-0 gap-y-1 sm:gap-y-0">
+
+                        <!-- L'accession s'étend sur les 3 colonnes mobiles -->
+                        <td class="block sm:table-cell px-1 sm:px-6 py-0.5 sm:py-4 col-span-3 border-b border-dashed border-gray-100 pb-2 mb-1 sm:border-0 sm:pb-4 sm:mb-0">
+                            <div class="text-sm text-gray-500 font-mono break-all">
+                                <a href="{{ tx.sec_url }}" target="_blank" class="text-brand hover:underline font-bold" title="Voir le document original">
+                                    {{ tx.accession_number }}
+                                </a>
+                                <span class="text-xs text-gray-400 ml-1">(L{{ tx.line_index }})</span>
+                            </div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium">
-                            {{ tx.shares|number_format(0, ',', ' ') }}
+
+                        <!-- Ligne 2 Mobile : Volume | Prix | Valeur -->
+                        <td class="block sm:table-cell px-1 sm:px-6 py-0.5 sm:py-4 sm:text-right">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase sm:hidden mb-0.5">Volume</div>
+                            <div class="text-sm text-gray-900 font-medium break-words">{{ tx.shares|number_format(0, ',', ' ') }}</div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                            ${{ tx.price_per_share|number_format(4, '.', ',') }}
+
+                        <td class="block sm:table-cell px-1 sm:px-6 py-0.5 sm:py-4 sm:text-right">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase sm:hidden mb-0.5">Prix</div>
+                            <div class="text-sm text-gray-500 break-words">${{ tx.price_per_share|number_format(4, '.', ',') }}</div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                            ${{ (tx.shares * tx.price_per_share)|number_format(2, '.', ' ') }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-center">
-                            <form method="POST" action="/analyze-detail/{{ tx.id }}">
-                                <button type="submit" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-colors">
-                                    <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                                    </svg>
-                                    Analyser
-                                </button>
-                            </form>
+
+                        <td class="block sm:table-cell px-1 sm:px-6 py-0.5 sm:py-4 sm:text-right">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase sm:hidden mb-0.5">Valeur Ligne</div>
+                            <div class="text-sm font-bold text-gray-900 break-words">${{ (tx.shares * tx.price_per_share)|number_format(0, '.', ' ') }}</div>
                         </td>
                     </tr>
                 {% endfor %}
                 </tbody>
-                <tfoot class="bg-gray-50 border-t border-gray-200">
-                <tr>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 text-right uppercase">Total Agrégé</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 text-right">
+
+                <tfoot class="bg-gray-50 border-t border-gray-200 block sm:table-footer-group">
+                <tr class="flex flex-col sm:table-row p-4 sm:p-0">
+                    <td class="px-1 sm:px-6 py-1 sm:py-4 whitespace-nowrap text-sm font-extrabold text-gray-900 sm:text-right uppercase block sm:table-cell">Total Agrégé</td>
+
+                    <td class="px-1 sm:px-6 py-1 sm:py-4 whitespace-nowrap text-sm font-bold text-gray-900 sm:text-right block sm:table-cell">
+                        <span class="sm:hidden text-gray-500 font-normal mr-2">Volume:</span>
                         {{ totalVolume|number_format(0, ',', ' ') }}
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 text-right">
-                        ${{ (totalValue / totalVolume)|number_format(4, '.', ',') }} <span class="text-xs text-gray-500 font-normal">(Moyen)</span>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900 text-right text-brand flex justify-between items-center">
-                        <span>${{ totalValue|number_format(2, '.', ' ') }}</span>
 
-                        <!-- LE BOUTON GLOBAL CONDITIONNÉ -->
+                    <td class="px-1 sm:px-6 py-1 sm:py-4 whitespace-nowrap text-sm font-bold text-gray-900 sm:text-right block sm:table-cell">
+                        <span class="sm:hidden text-gray-500 font-normal mr-2">Prix Moyen:</span>
+                        ${{ (totalValue / totalVolume)|number_format(4, '.', ',') }}
+                    </td>
+
+                    <td class="px-1 sm:px-6 py-2 sm:py-4 sm:whitespace-nowrap text-sm font-bold text-gray-900 sm:text-right text-brand flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 sm:gap-0 block sm:table-cell mt-2 sm:mt-0 border-t border-gray-200 sm:border-0 pt-3 sm:pt-0">
+                        <div class="text-lg sm:text-sm">
+                            <span class="sm:hidden text-gray-500 font-normal text-sm mr-2">Valeur Totale:</span>
+                            ${{ totalValue|number_format(0, '.', ' ') }}
+                        </div>
+
                         {% if not ai_signal %}
-                            <form method="POST" action="/analyze" class="ml-4 inline-block">
+                            <form method="POST" action="/analyze" class="w-full sm:w-auto sm:ml-4 inline-block">
                                 <input type="hidden" name="company_id" value="{{ context.company_id }}">
                                 <input type="hidden" name="insider_id" value="{{ context.insider_id }}">
                                 <input type="hidden" name="date" value="{{ date }}">
                                 <input type="hidden" name="type" value="{{ type }}">
-                                <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-bold rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-colors">
-                                    <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                                    </svg>
-                                    Analyser l'opération globale
+                                <button type="submit" class="w-full sm:w-auto inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-bold rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none transition-colors">
+                                    <svg class="mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                    Analyser l'opération
                                 </button>
                             </form>
                         {% else %}
-                            <span class="ml-4 inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-md text-gray-400 bg-gray-50 cursor-not-allowed">
+                            <span class="w-full sm:w-auto sm:ml-4 inline-flex justify-center items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-md text-gray-400 bg-white cursor-not-allowed">
                                 <svg class="mr-2 h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
                                 Analyse terminée
                             </span>

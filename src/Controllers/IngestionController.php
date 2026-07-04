@@ -72,27 +72,24 @@ class IngestionController
                 }
 
                 $issuerData = [
-                    'cik' => (string)$xml->issuer->issuerCik,
-                    'name' => (string)$xml->issuer->issuerName,
-                    'ticker' => (string)$xml->issuer->issuerTradingSymbol
+                    'cik' => isset($xml->issuer->issuerCik) ? (string)$xml->issuer->issuerCik : '',
+                    'name' => isset($xml->issuer->issuerName) ? (string)$xml->issuer->issuerName : 'UNKNOWN',
+                    'ticker' => isset($xml->issuer->issuerTradingSymbol) ? (string)$xml->issuer->issuerTradingSymbol : 'UNKNOWN'
                 ];
 
-                $ownerData = [
-                    'cik' => (string)$xml->reportingOwner->reportingOwnerId->rptOwnerCik,
-                    'name' => (string)$xml->reportingOwner->reportingOwnerId->rptOwnerName
-                ];
-
-                $reportingOwner = isset($xml->reportingOwner[0]) ? $xml->reportingOwner[0] : $xml->reportingOwner;
-
-                // --- NOUVEAU : Extraction des Remarks et Footnotes ---
-                $remarks = isset($xml->remarks) ? trim((string)$xml->remarks) : null;
-
-                // Si le CIK est introuvable, c'est un formulaire invalide, on passe au suivant.
-                if (empty($issuerData['cik']) || empty($ownerData['cik'])) {
+                if (!isset($xml->reportingOwner[0]->reportingOwnerId)) {
                     $this->model->setLastProcessedId($accessionNumber);
                     $processedCount++;
                     continue;
                 }
+
+                $ownerData = [
+                    'cik' => isset($xml->reportingOwner[0]->reportingOwnerId->rptOwnerCik) ? (string)$xml->reportingOwner[0]->reportingOwnerId->rptOwnerCik : '0000000000',
+                    'name' => isset($xml->reportingOwner[0]->reportingOwnerId->rptOwnerName) ? (string)$xml->reportingOwner[0]->reportingOwnerId->rptOwnerName : 'UNKNOWN'
+                ];
+
+                // --- NOUVEAU : Extraction des Remarks et Footnotes ---
+                $remarks = isset($xml->remarks) ? trim((string)$xml->remarks) : null;
 
                 $footnotesMap = [];
                 if (isset($xml->footnotes->footnote)) {
@@ -110,18 +107,23 @@ class IngestionController
                 }
 
                 $transactionsData = [];
-                $title = isset($xml->reportingOwner->reportingOwnerRelationship->officerTitle)
-                    ? (string)$xml->reportingOwner->reportingOwnerRelationship->officerTitle
-                    : 'Director';
+
+                $title = 'Director';
+                if (isset($xml->reportingOwner[0]->reportingOwnerRelationship->officerTitle)) {
+                    $title = (string)$xml->reportingOwner[0]->reportingOwnerRelationship->officerTitle;
+                }
 
                 $index = 0;
                 foreach ($xml->nonDerivativeTable->nonDerivativeTransaction as $tx) {
                     $tx_code = (string)$tx->transactionCoding->transactionCode;
+                    $price = (float)($tx->transactionAmounts->transactionPricePerShare->value ?? 0);
 
-                    // FILTRE STRATÉGIQUE : On ne garde QUE les Achats (P) et les Ventes (S) sur le marché ouvert
-                    if (!in_array($tx_code, ['P', 'S'])) {
+                    // FILTRE STRICT : Uniquement les achats/ventes (P/S) avec un prix valide
+                    if (!in_array($tx_code, ['P', 'S']) || $price <= 0) {
+                        $index++;
                         continue;
                     }
+
                     if (isset($tx->transactionAmounts->transactionShares->value)) {
 
                         // --- NOUVEAU : Trouver les notes de bas de page liées à cette transaction spécifique ---
@@ -139,15 +141,37 @@ class IngestionController
                         $footnotesText = !empty($lineFootnotes) ? implode("\n", $lineFootnotes) : null;
                         // --------------------------------------------------------------------------------------
 
+                        // --- NOUVELLES EXTRACTIONS (Skin in the game, Propriété, 10b5-1) ---
+                        $sharesFollowing = isset($tx->postTransactionAmounts->sharesOwnedFollowingTransaction->value)
+                            ? (int)$tx->postTransactionAmounts->sharesOwnedFollowingTransaction->value : 0;
+
+                        $dirInd = isset($tx->ownershipNature->directOrIndirectOwnership->value)
+                            ? (string)$tx->ownershipNature->directOrIndirectOwnership->value : 'D';
+
+                        $is10b51 = 0;
+                        if (isset($tx->rule10b51Transaction) && in_array(strtolower((string)$tx->rule10b51Transaction), ['1', 'true'])) {
+                            $is10b51 = 1;
+                        }
+                        if (!$is10b51) {
+                            $combinedText = ($footnotesText ?? '') . ' ' . ($remarks ?? '');
+                            if (preg_match('/10b5[- ]1/i', $combinedText)) {
+                                $is10b51 = 1;
+                            }
+                        }
+                        // -------------------------------------------------------------------
+
                         $transactionsData[] = [
                             'line_idx' => $index,
                             'tx_date'  => (string)$tx->transactionDate->value,
-                            'tx_code'  => (string)$tx->transactionCoding->transactionCode,
+                            'tx_code'  => $tx_code,
                             'shares'   => (int)$tx->transactionAmounts->transactionShares->value,
-                            'price'    => (float)($tx->transactionAmounts->transactionPricePerShare->value ?? 0),
+                            'price'    => $price,
                             'title'    => $title,
                             'remarks'  => $remarks, // On ajoute la remarque globale
-                            'footnotes'=> $footnotesText // On ajoute les notes spécifiques
+                            'footnotes'=> $footnotesText, // On ajoute les notes spécifiques
+                            'shares_following' => $sharesFollowing,
+                            'direct_or_indirect' => $dirInd,
+                            'is_10b51' => $is10b51
                         ];
                     }
                     $index++;

@@ -8,6 +8,9 @@ use App\Controllers\HomeController;
 use App\Controllers\IngestionController;
 use App\Controllers\DetailsController;
 use App\Controllers\AnalysisController;
+use App\Controllers\InsiderController;
+use App\Controllers\CompanyController;
+use App\Controllers\ScreenerController;
 use Slim\Views\Twig;
 use Slim\Views\TwigMiddleware;
 #use PDO;
@@ -39,6 +42,7 @@ $containerBuilder->addDefinitions([
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
+            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
         ];
 
         return new PDO($dsn, $user, $pass, $options);
@@ -71,6 +75,18 @@ $app->get('/details', [DetailsController::class, 'index']);
 $app->post('/analyze', [AnalysisController::class, 'analyze']);
 #A voir pour la suite si besoin de analyse-detail
 $app->post('/analyze-detail/{id}', [AnalysisController::class, 'analyze_detail']);
+
+// NOUVELLES ROUTES POUR LE PROFIL INITIÉ
+$app->get('/api/insiders/search', [InsiderController::class, 'searchApi']); // L'API pour l'AJAX
+$app->get('/insider/{id}', [InsiderController::class, 'profile']); // La page Profil
+$app->post('/insider/{id}/analyze', [InsiderController::class, 'analyzeProfile']); // L'action de lancer l'IA
+
+// NOUVELLES ROUTES ENTREPRISE
+$app->get('/company/{ticker}', [CompanyController::class, 'profile']);
+$app->get('/api/chart/data/{ticker}', [CompanyController::class, 'chartData']);
+
+// NOUVELLE ROUTE POUR LE SCREENER
+$app->get('/screener', [ScreenerController::class, 'index']);
 
 // 4. Lancement de l'application
 $app->run();
